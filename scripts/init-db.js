@@ -1,14 +1,13 @@
+// Applies any database migrations that have not been applied yet (safe to run as often as you like).
 require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
 const { pool } = require('../src/db');
+const { migrate } = require('../src/migrate');
 
 (async () => {
-  const sql = fs.readFileSync(path.join(__dirname, '..', 'schema.sql'), 'utf8');
-  await pool.query(sql);
-  console.log('Database schema is ready.');
+  const applied = await migrate(pool);
+  console.log(applied.length ? 'Database schema is ready.' : 'Database schema is already up to date.');
   await pool.end();
 })().catch((err) => {
-  console.error('Failed to initialise database:', err.message);
+  console.error('Failed to update the database:', err.message);
   process.exit(1);
 });

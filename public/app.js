@@ -28,7 +28,7 @@
       else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
       else el.setAttribute(k, v === true ? '' : v);
     }
-    for (const kid of kids.flat()) {
+    for (const kid of kids.flat(Infinity)) {
       if (kid == null || kid === false) continue;
       el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     }
@@ -54,7 +54,30 @@
     clear() { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } },
   };
 
-  const state = { token: store.get(), user: null, today: isoLocal(new Date()), habits: [], detailId: null, detailEntries: [] };
+  const state = {
+    token: store.get(), user: null, today: isoLocal(new Date()), habits: [],
+    detailId: null, detailEntries: [], detailStats: null,
+    view: 'today', archived: null, showArchived: false, overview: null,
+  };
+
+  /* ---------- Schedules ---------- */
+
+  const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const WEEKDAYS_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  function scheduleText(habit) {
+    if (habit.frequency === 'days') return (habit.days_of_week || []).map((d) => WEEKDAYS[d]).join(', ');
+    if (habit.frequency === 'weekly') return `${habit.times_per_week} ${habit.times_per_week === 1 ? 'time' : 'times'} a week`;
+    return 'Every day';
+  }
+
+  // Does this schedule expect a check-in on this date? Weekly goals have no fixed days.
+  function isRequired(habit, date) {
+    if (habit.frequency === 'days') return (habit.days_of_week || []).includes(parseISO(date).getDay());
+    if (habit.frequency === 'weekly') return false;
+    return true;
+  }
+
 
   const $app = document.getElementById('app');
   const $dialog = document.getElementById('dialog');
@@ -100,10 +123,11 @@
 
   /* ---------- Chain (14-day strip) ---------- */
 
-  function cellState(date, done, createdDate, today) {
+  function cellState(date, done, createdDate, today, required = true) {
     if (done) return 'done';
-    if (date === today) return 'pending';
     if (date < createdDate) return 'before';
+    if (!required) return 'rest';
+    if (date === today) return 'pending';
     return 'missed';
   }
 
@@ -114,7 +138,7 @@
 
   function chainCells(days, createdDate, today, extraClass) {
     const start = startOf(createdDate, days.filter((d) => d.completed).map((d) => d.date));
-    const states = days.map((d) => cellState(d.date, d.completed, start, today));
+    const states = days.map((d) => cellState(d.date, d.completed, start, today, d.required !== false));
     return states.map((s, i) => {
       const joinPrev = s === 'done' && states[i - 1] === 'done';
       const joinNext = s === 'done' && states[i + 1] === 'done';
@@ -227,43 +251,21 @@
     state.token = null;
     state.user = null;
     state.habits = [];
+    state.view = 'today';
+    state.archived = null;
+    state.showArchived = false;
     store.clear();
     if ($dialog.open) $dialog.close();
+    $dialog.replaceChildren();
     renderAuth('login', typeof notice === 'string' ? notice : undefined);
   }
 
-  /* ---------- Dashboard ---------- */
+  /* ---------- Page shell and navigation ---------- */
 
-  async function loadDashboard(focusId) {
-    state.today = isoLocal(new Date());
-    const data = await api(`/api/habits/summary?today=${state.today}`);
-    state.habits = data.habits;
-    renderDashboard(focusId);
-  }
+  const NAV = [['today', 'Today'], ['insights', 'Insights'], ['settings', 'Settings']];
 
-  function renderDashboard(focusId) {
-    const done = state.habits.filter((x) => x.completed_today).length;
-    const total = state.habits.length;
-
-    const sub =
-      total === 0
-        ? 'Nothing to check in yet.'
-        : done === total
-          ? h('span', {}, h('strong', { text: 'All done' }), ` for today. ${total} of ${total} checked in.`)
-          : h('span', {}, h('strong', { text: `${done} of ${total}` }), ' checked in today.');
-
-    const list =
-      total === 0
-        ? h(
-            'div',
-            { class: 'empty' },
-            h('h2', { class: 'empty__title', text: 'No habits yet' }),
-            h('p', { class: 'empty__text', text: 'Add something you want to do every day. Each check-in adds a link to its chain.' }),
-            h('button', { class: 'btn', type: 'button', onclick: openNewHabit, text: 'Add your first habit' })
-          )
-        : h('ul', { class: 'habits', 'aria-label': 'Your habits' }, state.habits.map(habitRow));
-
-    $app.replaceChildren(
+  function shell(...content) {
+    return [
       h(
         'header',
         { class: 'topbar' },
@@ -277,15 +279,77 @@
           'Habit Tracker'
         ),
         h(
+          'nav',
+          { class: 'nav', 'aria-label': 'Main' },
+          NAV.map(([id, label]) =>
+            h('button', {
+              class: 'nav__link', type: 'button', text: label,
+              'aria-current': state.view === id ? 'page' : null,
+              onclick: () => go(id),
+            })
+          )
+        ),
+        h(
           'div',
           { class: 'topbar__user' },
           h('span', { class: 'topbar__email', text: state.user ? state.user.email : '' }),
           h('button', { class: 'btn btn--quiet btn--small', type: 'button', onclick: () => signOut(), text: 'Log out' })
         )
       ),
-      h(
-        'main',
-        { class: 'page' },
+      h('main', { class: 'page' }, content),
+    ];
+  }
+
+  async function go(view) {
+    state.view = view;
+    try {
+      if (view === 'today') await loadDashboard();
+      else if (view === 'insights') await loadInsights();
+      else renderSettings();
+      window.scrollTo(0, 0);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  /* ---------- Today ---------- */
+
+  async function loadDashboard(focusId) {
+    state.today = isoLocal(new Date());
+    const data = await api(`/api/habits/summary?today=${state.today}`);
+    state.habits = data.habits;
+    if (state.view === 'today' || !$app.firstChild) renderDashboard(focusId);
+  }
+
+  function renderDashboard(focusId) {
+    state.view = 'today';
+    // Habits with a fixed day count towards "today" only when that day is one of their days (or already done).
+    const due = state.habits.filter((x) => x.required_today || x.completed_today);
+    const done = due.filter((x) => x.completed_today).length;
+    const total = due.length;
+
+    const sub =
+      state.habits.length === 0
+        ? 'Nothing to check in yet.'
+        : total === 0
+          ? 'Nothing is due today. Enjoy the rest day.'
+          : done === total
+            ? h('span', {}, h('strong', { text: 'All done' }), ` for today. ${total} of ${total} checked in.`)
+            : h('span', {}, h('strong', { text: `${done} of ${total}` }), ' checked in today.');
+
+    const list =
+      state.habits.length === 0
+        ? h(
+            'div',
+            { class: 'empty' },
+            h('h2', { class: 'empty__title', text: 'No habits yet' }),
+            h('p', { class: 'empty__text', text: 'Add something you want to do. Each check-in adds a link to its chain.' }),
+            h('button', { class: 'btn', type: 'button', onclick: openNewHabit, text: 'Add your first habit' })
+          )
+        : h('ul', { class: 'habits', 'aria-label': 'Your habits' }, state.habits.map(habitRow));
+
+    $app.replaceChildren(
+      ...shell(
         h(
           'div',
           { class: 'page__head' },
@@ -295,9 +359,10 @@
             h('h1', { class: 'page__title', text: 'Today' }),
             h('p', { class: 'page__sub' }, fmt(state.today, { weekday: 'long', month: 'long', day: 'numeric' }), ' – ', sub)
           ),
-          total > 0 ? h('button', { class: 'btn', type: 'button', onclick: openNewHabit, text: 'New habit' }) : null
+          state.habits.length > 0 ? h('button', { class: 'btn', type: 'button', onclick: openNewHabit, text: 'New habit' }) : null
         ),
-        list
+        list,
+        archivedSection()
       )
     );
 
@@ -312,6 +377,7 @@
     const cur = habit.current_streak;
     const broken = cur === 0 && habit.total_completed > 0;
     const doneCount = habit.recent.filter((d) => d.completed).length;
+    const rest = habit.frequency === 'days' && !habit.required_today && !habit.completed_today;
 
     const check = h(
       'button',
@@ -324,15 +390,25 @@
       checkIcon()
     );
 
+    const meta = [h('span', { class: 'tag', text: scheduleText(habit) })];
+    if (rest) meta.push(h('span', { class: 'tag tag--rest', text: 'Rest day' }));
+    if (habit.frequency === 'weekly') {
+      const met = habit.week_count >= habit.week_goal;
+      meta.push(
+        h('span', { class: met ? 'tag tag--met' : 'tag', text: `${habit.week_count} of ${habit.week_goal} this week` })
+      );
+    }
+
     return h(
       'li',
-      { class: 'habit' },
+      { class: rest ? 'habit habit--rest' : 'habit' },
       check,
       h(
         'button',
         { class: 'habit__info', type: 'button', dataset: { id: habit.id }, onclick: () => openDetail(habit.id) },
         h('span', { class: 'habit__name', text: habit.name }),
-        habit.description ? h('span', { class: 'habit__desc', text: habit.description }) : null
+        habit.description ? h('span', { class: 'habit__desc', text: habit.description }) : null,
+        h('span', { class: 'habit__meta' }, meta)
       ),
       h(
         'div',
@@ -343,7 +419,255 @@
         'div',
         { class: broken ? 'streak streak--broken' : 'streak' },
         h('span', { class: 'streak__num', text: String(cur) }),
-        h('span', { class: 'streak__unit', text: broken ? 'streak broken' : 'day streak' })
+        h('span', { class: 'streak__unit', text: broken ? 'streak broken' : `${habit.streak_unit} streak` })
+      )
+    );
+  }
+
+  /* Archived habits: hidden by default, listed on request, restorable. */
+  function archivedSection() {
+    const toggle = h('button', {
+      class: 'btn btn--quiet btn--small', type: 'button', 'aria-expanded': String(state.showArchived),
+      text: state.showArchived ? 'Hide archived habits' : 'Show archived habits',
+      onclick: async () => {
+        state.showArchived = !state.showArchived;
+        if (state.showArchived) {
+          try { await loadArchived(); } catch (err) { toast(err.message, 'error'); state.showArchived = false; }
+        }
+        renderDashboard();
+      },
+    });
+    const body = [];
+    if (state.showArchived && state.archived) {
+      body.push(
+        state.archived.length === 0
+          ? h('p', { class: 'sheet__note', text: 'No archived habits.' })
+          : h(
+              'ul',
+              { class: 'archived' },
+              state.archived.map((a) =>
+                h(
+                  'li',
+                  { class: 'archived__item' },
+                  h('span', { class: 'archived__name' }, h('strong', { text: a.name }), h('span', { class: 'tag', text: scheduleText(a) })),
+                  h('button', {
+                    class: 'btn btn--quiet btn--small', type: 'button', text: 'Restore',
+                    'aria-label': `Restore ${a.name}`,
+                    onclick: async () => {
+                      try {
+                        await api(`/api/habits/${a.id}/restore`, { method: 'POST' });
+                        await loadArchived();
+                        await loadDashboard();
+                        toast('Habit restored');
+                      } catch (err) { toast(err.message, 'error'); }
+                    },
+                  })
+                )
+              )
+            )
+      );
+    }
+    return h('section', { class: 'archive-block' }, toggle, body);
+  }
+
+  async function loadArchived() {
+    const data = await api('/api/habits?archived=true&limit=100&sort=name&order=asc');
+    state.archived = data.habits;
+  }
+
+  /* ---------- Insights ---------- */
+
+  async function loadInsights() {
+    state.today = isoLocal(new Date());
+    state.overview = await api(`/api/stats/overview?today=${state.today}`);
+    renderInsights();
+  }
+
+  function renderInsights() {
+    state.view = 'insights';
+    const o = state.overview;
+    const rate = (v) => (v == null ? '–' : `${v}%`);
+
+    const card = (num, label, note) =>
+      h('div', { class: 'card' }, h('span', { class: 'card__num', text: String(num) }), h('span', { class: 'card__label', text: label }), note ? h('span', { class: 'card__note', text: note }) : null);
+
+    const best = o.best_current_streak;
+    const cards = h('div', { class: 'cards' },
+      card(`${o.checked_in_today}/${o.active_habits}`, 'Checked in today'),
+      card(o.checkins_this_week, 'Check-ins this week'),
+      card(rate(o.completion_rate.days_30), '30-day completion'),
+      card(best ? best.streak : 0, best ? `Best streak (${best.unit}s)` : 'Best streak', best ? best.name : 'Check in to start one'));
+
+    let body;
+    if (o.active_habits === 0 && o.total_checkins === 0) {
+      body = h('div', { class: 'empty' },
+        h('h2', { class: 'empty__title', text: 'Nothing to chart yet' }),
+        h('p', { class: 'empty__text', text: 'Add a habit and check in a few times. Your trends will show up here.' }),
+        h('button', { class: 'btn', type: 'button', onclick: () => go('today'), text: 'Go to Today' }));
+    } else {
+      body = [cards, heatmap(o), weekdayBars(o), habitRates(o)];
+    }
+
+    $app.replaceChildren(
+      ...shell(
+        h('div', { class: 'page__head' }, h('div', {}, h('h1', { class: 'page__title', text: 'Insights' }),
+          h('p', { class: 'page__sub', text: `${o.total_checkins} ${o.total_checkins === 1 ? 'check-in' : 'check-ins'} across ${o.active_habits} active ${o.active_habits === 1 ? 'habit' : 'habits'}.` }))),
+        body
+      )
+    );
+  }
+
+  /* Twelve weeks of activity: one square per day, darker blue when more habits were done. */
+  function heatmap(o) {
+    const max = Math.max(1, o.active_habits);
+    const level = (n) => (n === 0 ? 0 : Math.min(4, Math.ceil((n / max) * 4)));
+    const cells = o.activity.map((d) =>
+      h('span', {
+        class: `heat heat--${level(d.count)}`,
+        title: `${fmt(d.date, { weekday: 'short', month: 'short', day: 'numeric' })}: ${d.count} ${d.count === 1 ? 'check-in' : 'check-ins'}`,
+      })
+    );
+    const total = o.activity.reduce((n, d) => n + d.count, 0);
+    const dow = ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((c) => h('span', { class: 'heatgrid__dow', 'aria-hidden': 'true', text: c }));
+    return h('section', { class: 'panel' },
+      h('h2', { class: 'panel__title', text: 'Last 12 weeks' }),
+      h('p', { class: 'sheet__note', text: `${total} check-ins. Darker squares mean more of your habits were done that day.` }),
+      h('div', { class: 'heatwrap', role: 'img', 'aria-label': `Heat map of check-ins for the last 12 weeks, ${total} in total.` },
+        h('div', { class: 'heatgrid' }, dow, cells)),
+      h('div', { class: 'legend', 'aria-hidden': 'true' },
+        h('span', { text: 'Fewer' }), [0, 1, 2, 3, 4].map((l) => h('span', { class: `heat heat--${l}` })), h('span', { text: 'More' })));
+  }
+
+  function weekdayBars(o) {
+    const max = Math.max(1, ...o.by_weekday.map((d) => d.completed));
+    const best = o.by_weekday.reduce((a, b) => (b.completed > a.completed ? b : a), o.by_weekday[0]);
+    return h('section', { class: 'panel' },
+      h('h2', { class: 'panel__title', text: 'Your best days' }),
+      h('p', { class: 'sheet__note', text: best.completed > 0 ? `You check in most on ${WEEKDAYS_LONG[best.day]}s.` : 'Check in to see which days work best.' }),
+      h('ul', { class: 'bars' },
+        o.by_weekday.map((d) =>
+          h('li', { class: 'bar' },
+            h('span', { class: 'bar__label', text: WEEKDAYS[d.day] }),
+            h('span', { class: 'bar__track' }, h('span', { class: 'bar__fill', style: `width:${Math.round((d.completed / max) * 100)}%` })),
+            h('span', { class: 'bar__value', text: String(d.completed) })))));
+  }
+
+  function habitRates(o) {
+    if (!o.habits.length) return null;
+    return h('section', { class: 'panel' },
+      h('h2', { class: 'panel__title', text: 'By habit (last 30 days)' }),
+      h('ul', { class: 'bars bars--wide' },
+        o.habits.map((x) => {
+          const r = x.rate_30;
+          return h('li', { class: 'bar bar--habit' },
+            h('span', { class: 'bar__label' }, h('strong', { text: x.name }), h('span', { class: 'tag', text: `${x.current_streak} ${x.streak_unit} streak` })),
+            h('span', { class: 'bar__track' }, h('span', { class: r != null && r < 40 ? 'bar__fill bar__fill--low' : 'bar__fill', style: `width:${r == null ? 0 : r}%` })),
+            h('span', { class: 'bar__value', text: r == null ? '–' : `${r}%` }));
+        })));
+  }
+
+  /* ---------- Settings ---------- */
+
+  function renderSettings() {
+    state.view = 'settings';
+
+    /* Change password */
+    const pwError = h('p', { class: 'form__error', role: 'alert' });
+    const cur = h('input', { class: 'input', id: 'pw-current', type: 'password', required: true, autocomplete: 'current-password', maxlength: '72' });
+    const next = h('input', { class: 'input', id: 'pw-new', type: 'password', required: true, autocomplete: 'new-password', minlength: '8', maxlength: '72' });
+    const pwBtn = h('button', { class: 'btn', type: 'submit', text: 'Change password' });
+    const pwForm = h('form', {
+      class: 'form', novalidate: true,
+      onsubmit: async (e) => {
+        e.preventDefault();
+        pwError.textContent = '';
+        pwBtn.disabled = true;
+        try {
+          const data = await api('/api/auth/password', { method: 'PUT', body: { current_password: cur.value, new_password: next.value } });
+          state.token = data.token;
+          store.set(data.token);
+          cur.value = '';
+          next.value = '';
+          toast('Password changed. Other devices were signed out.');
+        } catch (err) {
+          pwError.textContent = err.message;
+        }
+        pwBtn.disabled = false;
+      },
+    },
+    h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'pw-current', text: 'Current password' }), cur),
+    h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'pw-new', text: 'New password' }), next, h('span', { class: 'field__hint', text: 'At least 8 characters.' })),
+    pwError,
+    h('div', { class: 'form__actions' }, pwBtn));
+
+    /* Sessions */
+    const logoutAll = h('button', {
+      class: 'btn btn--quiet', type: 'button', text: 'Log out everywhere',
+      onclick: async () => {
+        try {
+          await api('/api/auth/logout-all', { method: 'POST' });
+          signOut('You were signed out on every device. Log in again.');
+        } catch (err) { toast(err.message, 'error'); }
+      },
+    });
+
+    /* Export */
+    const download = async (format) => {
+      try {
+        const res = await fetch(`/api/export?format=${format}`, { headers: { Authorization: `Bearer ${state.token}` } });
+        if (res.status === 401) return signOut('Your session ended. Log in again.');
+        if (!res.ok) throw new Error('Could not export your data. Try again.');
+        const url = URL.createObjectURL(await res.blob());
+        const a = h('a', { href: url, download: `habit-tracker-${state.today}.${format}` });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        toast(`Exported as ${format.toUpperCase()}`);
+      } catch (err) { toast(err.message, 'error'); }
+    };
+
+    /* Delete account (two steps, password required) */
+    const dangerBox = h('div', { class: 'danger' });
+    const showDelete = () => dangerBox.replaceChildren(h('button', { class: 'btn btn--danger', type: 'button', text: 'Delete my account', onclick: arm }));
+    const arm = () => {
+      const err = h('p', { class: 'form__error', role: 'alert' });
+      const pw = h('input', { class: 'input', id: 'del-pw', type: 'password', autocomplete: 'current-password', maxlength: '72' });
+      const go = h('button', { class: 'btn btn--danger-armed', type: 'submit', text: 'Delete everything for good' });
+      dangerBox.replaceChildren(h('form', {
+        class: 'form', novalidate: true,
+        onsubmit: async (e) => {
+          e.preventDefault();
+          err.textContent = '';
+          go.disabled = true;
+          try {
+            await api('/api/auth/me', { method: 'DELETE', body: { password: pw.value } });
+            signOut('Your account was deleted.');
+          } catch (ex) { err.textContent = ex.message; go.disabled = false; }
+        },
+      },
+      h('p', { class: 'sheet__note', text: 'This removes your account, every habit and every check-in. It can’t be undone. Enter your password to confirm.' }),
+      h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'del-pw', text: 'Password' }), pw),
+      err,
+      h('div', { class: 'form__actions' }, go, h('button', { class: 'btn btn--quiet', type: 'button', text: 'Keep my account', onclick: showDelete }))));
+      pw.focus();
+    };
+    showDelete();
+
+    const panel = (title, ...kids) => h('section', { class: 'panel' }, h('h2', { class: 'panel__title', text: title }), kids);
+
+    $app.replaceChildren(
+      ...shell(
+        h('div', { class: 'page__head' }, h('div', {}, h('h1', { class: 'page__title', text: 'Settings' }),
+          h('p', { class: 'page__sub', text: state.user ? `Signed in as ${state.user.email}` : '' }))),
+        h('div', { class: 'settings' },
+          panel('Password', pwForm),
+          panel('Sessions', h('p', { class: 'sheet__note', text: 'Signs you out of this browser and every other device where you are logged in.' }), logoutAll),
+          panel('Your data', h('p', { class: 'sheet__note', text: 'Download every habit and check-in, including archived habits.' }),
+            h('div', { class: 'form__actions' },
+              h('button', { class: 'btn btn--quiet', type: 'button', text: 'Download JSON', onclick: () => download('json') }),
+              h('button', { class: 'btn btn--quiet', type: 'button', text: 'Download CSV', onclick: () => download('csv') }))),
+          panel('Delete account', dangerBox))
       )
     );
   }
@@ -388,12 +712,51 @@
 
   const closeButton = () => h('button', { class: 'btn btn--quiet btn--small', type: 'button', onclick: () => $dialog.close(), text: 'Close' });
 
+  /* Schedule picker: every day, certain weekdays, or a number of times a week. */
+  function schedulePicker(initial = {}) {
+    const uid = `sch${Math.random().toString(36).slice(2, 7)}`;
+    let mode = initial.frequency || 'daily';
+    const selected = new Set(initial.days_of_week || []);
+    const times = h('select', { class: 'input input--select', id: `${uid}-times`, 'aria-label': 'Times per week' },
+      [1, 2, 3, 4, 5, 6, 7].map((n) => h('option', { value: String(n), text: `${n} ${n === 1 ? 'time' : 'times'} a week`, selected: n === (initial.times_per_week || 3) })));
+    const dayRow = h('div', { class: 'days', role: 'group', 'aria-label': 'Days of the week' },
+      WEEKDAYS.map((name, i) =>
+        h('button', {
+          class: 'daybtn', type: 'button', text: name, 'aria-pressed': String(selected.has(i)), 'aria-label': WEEKDAYS_LONG[i],
+          onclick: (e) => {
+            if (selected.has(i)) selected.delete(i); else selected.add(i);
+            e.currentTarget.setAttribute('aria-pressed', String(selected.has(i)));
+          },
+        })
+      ));
+    const detail = h('div', { class: 'schedule__detail' });
+    const modes = [['daily', 'Every day'], ['days', 'Certain days'], ['weekly', 'Times a week']];
+    const radios = modes.map(([value, label]) =>
+      h('label', { class: 'choice' },
+        h('input', { type: 'radio', name: `${uid}-mode`, value, checked: value === mode, onchange: () => { mode = value; sync(); } }),
+        h('span', { text: label }))
+    );
+    function sync() {
+      detail.replaceChildren(...(mode === 'days' ? [dayRow] : mode === 'weekly' ? [times] : []));
+    }
+    sync();
+    return {
+      el: h('fieldset', { class: 'schedule' }, h('legend', { class: 'field__label', text: 'How often' }), h('div', { class: 'choices' }, radios), detail),
+      value() {
+        if (mode === 'days') return { frequency: 'days', days_of_week: [...selected].sort((a, b) => a - b) };
+        if (mode === 'weekly') return { frequency: 'weekly', times_per_week: Number(times.value) };
+        return { frequency: 'daily' };
+      },
+    };
+  }
+
   function openNewHabit() {
     state.detailId = null;
     const error = h('p', { class: 'form__error', role: 'alert' });
     const name = h('input', { class: 'input', id: 'new-name', required: true, maxlength: '100', placeholder: 'Read for 20 minutes' });
     const desc = h('textarea', { class: 'input', id: 'new-desc', maxlength: '500' });
     const save = h('button', { class: 'btn', type: 'submit', text: 'Add habit' });
+    const picker = schedulePicker();
 
     showSheet(
       h('div', { class: 'sheet__head' }, h('h2', { class: 'sheet__title', id: 'dialog-title', text: 'New habit' }), closeButton()),
@@ -406,7 +769,7 @@
             error.textContent = '';
             save.disabled = true;
             try {
-              await api('/api/habits', { method: 'POST', body: { name: name.value, description: desc.value } });
+              await api('/api/habits', { method: 'POST', body: { name: name.value, description: desc.value, ...picker.value() } });
               $dialog.close();
               await loadDashboard();
               toast('Habit added');
@@ -418,6 +781,7 @@
         },
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'new-name', text: 'Name' }), name),
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'new-desc', text: 'Notes (optional)' }), desc),
+        picker.el,
         error,
         h('div', { class: 'form__actions' }, save)
       )
@@ -448,15 +812,37 @@
     const id = state.detailId;
     const scroll = $dialog.scrollTop;
     const { start } = calendarRange();
-    const [, entries] = await Promise.all([
+    const [, entries, stats] = await Promise.all([
       loadDashboard(),
-      api(`/api/habits/${id}/entries?from=${start}&to=${state.today}`),
+      api(`/api/habits/${id}/entries?from=${start}&to=${state.today}&limit=500`),
+      api(`/api/habits/${id}/stats?today=${state.today}`),
     ]);
+    state.detailStats = stats;
     const habit = state.habits.find((x) => x.id === id);
     if (!habit) { if ($dialog.open) $dialog.close(); return; }
     state.detailEntries = entries.entries;
     renderDetail(habit);
     $dialog.scrollTop = scroll;
+  }
+
+  /* Completion rates, this week's progress and milestone badges for one habit. */
+  function insightsBlock(habit, stats) {
+    if (!stats) return null;
+    const rate = (v) => (v == null ? '–' : `${v}%`);
+    const rates = h('div', { class: 'rates', role: 'list' },
+      [['Last 7 days', stats.completion_rate.days_7], ['Last 30 days', stats.completion_rate.days_30], ['Last 90 days', stats.completion_rate.days_90]].map(([label, v]) =>
+        h('div', { class: 'rate', role: 'listitem' }, h('span', { class: 'rate__num', text: rate(v) }), h('span', { class: 'rate__label', text: label }))
+      ));
+    const weekly = habit.frequency === 'weekly'
+      ? h('p', { class: 'sheet__note' }, h('strong', { text: `${habit.week_count} of ${habit.week_goal}` }), ' check-ins so far this week (weeks run Sunday to Saturday).')
+      : habit.frequency === 'days'
+        ? h('p', { class: 'sheet__note', text: `Scheduled: ${scheduleText(habit)}. Other days are rest days.` })
+        : null;
+    const badges = h('ul', { class: 'badges', 'aria-label': 'Milestones' },
+      stats.milestones.map((m) =>
+        h('li', { class: m.achieved ? 'badge badge--on' : 'badge' }, h('span', { class: 'sr-only', text: m.achieved ? 'Earned: ' : 'Locked: ' }), m.label)
+      ));
+    return h('section', { class: 'sheet__section' }, h('h3', { class: 'sheet__h', text: 'Progress' }), rates, weekly, badges);
   }
 
   function renderDetail(habit) {
@@ -477,10 +863,10 @@
     const cells = days.map((date, i) => {
       const future = date > state.today;
       const done = !future && byDate.has(date) && byDate.get(date).completed;
-      const s = future ? 'future' : cellState(date, done, createdDate, state.today);
+      const s = future ? 'future' : cellState(date, done, createdDate, state.today, isRequired(habit, date) || (habit.frequency === 'daily'));
       const showMonth = i === 0 || parseISO(date).getDate() === 1;
       const dayNum = String(parseISO(date).getDate());
-      const label = `${fmt(date, { weekday: 'long', month: 'long', day: 'numeric' })}: ${future ? 'upcoming' : done ? 'done. Select to remove.' : 'not done. Select to check in.'}`;
+      const label = `${fmt(date, { weekday: 'long', month: 'long', day: 'numeric' })}: ${future ? 'upcoming' : done ? 'done. Select to remove.' : s === 'rest' ? 'not scheduled. Select to check in anyway.' : 'not done. Select to check in.'}`;
       return h(
         'button',
         { class: `cell cell--${s}`, type: 'button', disabled: future, 'aria-label': label, onclick: () => toggleDay(habit, date, false) },
@@ -550,6 +936,7 @@
     const desc = h('textarea', { class: 'input', id: 'edit-desc', maxlength: '500' });
     desc.value = habit.description || '';
     const editBtn = h('button', { class: 'btn', type: 'submit', text: 'Save changes' });
+    const picker = schedulePicker(habit);
     const editForm = h(
       'form',
       {
@@ -559,7 +946,7 @@
           editError.textContent = '';
           editBtn.disabled = true;
           try {
-            await api(`/api/habits/${habit.id}`, { method: 'PUT', body: { name: name.value, description: desc.value } });
+            await api(`/api/habits/${habit.id}`, { method: 'PUT', body: { name: name.value, description: desc.value, ...picker.value() } });
             await refreshDetail();
             toast('Changes saved');
           } catch (err) {
@@ -570,6 +957,7 @@
       },
       h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'edit-name', text: 'Name' }), name),
       h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'edit-desc', text: 'Notes' }), desc),
+      picker.el,
       editError,
       h('div', { class: 'form__actions' }, editBtn)
     );
@@ -578,7 +966,23 @@
     const dangerBox = h('div', { class: 'danger' });
     const showDelete = () => {
       const del = h('button', { class: 'btn btn--danger', type: 'button', text: 'Delete habit', onclick: arm });
-      dangerBox.replaceChildren(del);
+      const archive = h('button', {
+        class: 'btn btn--quiet', type: 'button', text: 'Archive habit',
+        onclick: async () => {
+          try {
+            await api(`/api/habits/${habit.id}/archive`, { method: 'POST' });
+            state.detailId = null;
+            state.archived = null;
+            $dialog.close();
+            await loadDashboard();
+            toast('Habit archived. Find it under Show archived habits.');
+          } catch (err) { toast(err.message, 'error'); }
+        },
+      });
+      dangerBox.replaceChildren(
+        h('p', { class: 'sheet__note', text: 'Archiving hides the habit and keeps its history. You can restore it any time.' }),
+        h('div', { class: 'form__actions' }, archive, del)
+      );
     };
     const arm = () => {
       const confirmBtn = h('button', {
@@ -611,6 +1015,7 @@
       { class: 'legend', 'aria-hidden': 'true' },
       h('span', { class: 'legend__item' }, h('span', { class: 'cell cell--done' }), 'Done'),
       h('span', { class: 'legend__item' }, h('span', { class: 'cell cell--missed' }), 'Missed'),
+      habit.frequency === 'daily' ? null : h('span', { class: 'legend__item' }, h('span', { class: 'cell cell--rest' }), habit.frequency === 'weekly' ? 'Open day' : 'Rest day'),
       h('span', { class: 'legend__item' }, h('span', { class: 'cell cell--pending' }), 'Today')
     );
 
@@ -624,10 +1029,11 @@
       h(
         'div',
         { class: 'stats' },
-        stat(habit.current_streak, 'day streak', broken),
+        stat(habit.current_streak, `${habit.streak_unit} streak`, broken),
         stat(habit.longest_streak, 'Best streak'),
-        stat(habit.total_completed, 'Total days')
+        stat(habit.total_completed, 'Total check-ins')
       ),
+      insightsBlock(habit, state.detailStats),
       h(
         'section',
         { class: 'sheet__section' },

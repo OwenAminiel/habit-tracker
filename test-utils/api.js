@@ -9,6 +9,8 @@ let server;
 let base;
 const createdUserIds = [];
 
+process.env.NODE_ENV = 'test';
+
 if (enabled) {
   process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
   if (process.env.TEST_DATABASE_SSL !== undefined) process.env.DATABASE_SSL = process.env.TEST_DATABASE_SSL;
@@ -18,6 +20,8 @@ if (enabled) {
 const skipReason = enabled ? false : 'Set TEST_DATABASE_URL to run the API tests (see README).';
 
 async function start() {
+  // Bring the test database up to date, so a fresh database needs no manual setup.
+  await require('../src/migrate').migrate(require('../src/db').pool, () => {});
   const app = require('../src/app');
   await new Promise((resolve) => {
     server = app.listen(0, resolve);
@@ -55,7 +59,16 @@ async function newUser() {
   return { email, id: res.body.user.id, token: res.body.token };
 }
 
-const newHabit = async (user, name = 'Test habit') =>
-  (await call('POST', '/api/habits', { token: user.token, body: { name } })).body.habit;
+// newHabit(user), newHabit(user, 'Name'), or newHabit(user, { name, frequency, ... })
+const newHabit = async (user, nameOrBody = 'Test habit') => {
+  const body = typeof nameOrBody === 'string' ? { name: nameOrBody } : nameOrBody;
+  const res = await call('POST', '/api/habits', { token: user.token, body });
+  if (res.status !== 201) throw new Error(`Could not create test habit: ${res.text}`);
+  return res.body.habit;
+};
 
-module.exports = { skipReason, start, stop, call, newUser, newHabit };
+// Log a check-in on a specific date; returns the response.
+const checkIn = (user, habit, date, extra = {}) =>
+  call('POST', `/api/habits/${habit.id}/entries`, { token: user.token, body: { entry_date: date, ...extra } });
+
+module.exports = { skipReason, start, stop, call, newUser, newHabit, checkIn, getBase: () => base };

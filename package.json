@@ -1,14 +1,17 @@
 {
   "name": "habit-tracker-api",
-  "version": "1.0.0",
-  "description": "Habit Tracker: REST API and web app with authentication, PostgreSQL storage, validation, and streak tracking (COMP 4327 course project).",
+  "version": "2.0.0",
+  "description": "Habit Tracker: REST API and web app with authentication, PostgreSQL storage, validation, schedules, streaks and statistics (COMP 4327 course project).",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "db:init": "node scripts/init-db.js",
     "test": "node --test",
-    "test:unit": "node --test test/streak.test.js"
+    "test:unit": "node --test test/streak.test.js test/stats.test.js test/unit-misc.test.js",
+    "db:migrate": "node scripts/init-db.js",
+    "lint": "eslint .",
+    "check": "npm run lint && npm test"
   },
   "engines": {
     "node": ">=18"
@@ -19,9 +22,16 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "express-rate-limit": "^7.5.1",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.11.5",
+    "swagger-ui-express": "^5.0.1",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0"
   }
 }
