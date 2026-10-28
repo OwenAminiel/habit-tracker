@@ -4,6 +4,8 @@ const db = require('../db');
 const { validate } = require('../middleware/validate');
 const { requireAuth } = require('../middleware/auth');
 const { AppError, asyncHandler } = require('../utils/errors');
+const { computeStreaks } = require('../utils/streak');
+const { isoDate, utcToday, addDays } = require('../utils/dates');
 const entriesRouter = require('./entries');
 
 const router = express.Router();
@@ -35,6 +37,43 @@ router.get(
   asyncHandler(async (req, res) => {
     const { rows } = await db.query('SELECT * FROM habits WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
     res.json({ habits: rows });
+  })
+);
+
+// One request for the dashboard: every habit with streaks, today's status and the last 14 days.
+router.get(
+  '/summary',
+  validate(z.object({ today: isoDate.optional() }), 'query'),
+  asyncHandler(async (req, res) => {
+    const today = req.query.today || utcToday();
+    const { rows: habits } = await db.query('SELECT * FROM habits WHERE user_id = $1 ORDER BY created_at ASC', [
+      req.user.id,
+    ]);
+    const { rows: entries } = await db.query(
+      `SELECT e.habit_id, e.entry_date FROM entries e
+       JOIN habits h ON h.id = e.habit_id
+       WHERE h.user_id = $1 AND e.completed = TRUE`,
+      [req.user.id]
+    );
+    const byHabit = new Map();
+    for (const e of entries) {
+      if (!byHabit.has(e.habit_id)) byHabit.set(e.habit_id, []);
+      byHabit.get(e.habit_id).push(e.entry_date);
+    }
+    const days = Array.from({ length: 14 }, (_, i) => addDays(today, i - 13));
+    res.json({
+      today,
+      habits: habits.map((h) => {
+        const dates = byHabit.get(h.id) || [];
+        const done = new Set(dates);
+        return {
+          ...h,
+          ...computeStreaks(dates, today),
+          completed_today: done.has(today),
+          recent: days.map((date) => ({ date, completed: done.has(date) })),
+        };
+      }),
+    });
   })
 );
 

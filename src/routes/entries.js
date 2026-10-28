@@ -3,16 +3,11 @@ const { z } = require('zod');
 const db = require('../db');
 const { validate } = require('../middleware/validate');
 const { computeStreaks } = require('../utils/streak');
+const { isoDate, utcToday, addDays } = require('../utils/dates');
 const { AppError, asyncHandler } = require('../utils/errors');
 
 // Mounted at /api/habits/:id (the habit is already loaded and ownership-checked).
 const router = express.Router({ mergeParams: true });
-
-const today = () => new Date().toISOString().slice(0, 10);
-const isoDate = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format.')
-  .refine((s) => new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s, 'Not a valid calendar date.');
 
 const entrySchema = z.object({
   entry_date: isoDate.optional(),
@@ -20,14 +15,17 @@ const entrySchema = z.object({
   note: z.string().trim().max(500).optional().default(''),
 });
 const rangeSchema = z.object({ from: isoDate.optional(), to: isoDate.optional() });
+// Clients may send their own local date so streaks follow the user's time zone.
+const todaySchema = z.object({ today: isoDate.optional() });
 
 router.post(
   '/entries',
   validate(entrySchema),
   asyncHandler(async (req, res) => {
     const { completed, note } = req.body;
-    const date = req.body.entry_date || today();
-    if (date > today()) throw new AppError(400, 'Cannot record progress for a future date.');
+    const date = req.body.entry_date || utcToday();
+    // Allow one day of slack so users ahead of UTC can log their own "today".
+    if (date > addDays(utcToday(), 1)) throw new AppError(400, 'Cannot record progress for a future date.');
 
     const { rows } = await db.query(
       `INSERT INTO entries (habit_id, entry_date, completed, note)
@@ -75,12 +73,13 @@ router.delete(
 
 router.get(
   '/streak',
+  validate(todaySchema, 'query'),
   asyncHandler(async (req, res) => {
     const { rows } = await db.query(
       'SELECT entry_date FROM entries WHERE habit_id = $1 AND completed = TRUE ORDER BY entry_date',
       [req.habit.id]
     );
-    res.json({ habit_id: req.habit.id, ...computeStreaks(rows.map((r) => r.entry_date)) });
+    res.json({ habit_id: req.habit.id, ...computeStreaks(rows.map((r) => r.entry_date), req.query.today) });
   })
 );
 
