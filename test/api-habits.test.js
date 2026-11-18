@@ -372,8 +372,8 @@ describe('Habit schedules, lists, archive, stats and export', { skip: skipReason
       assert.strictEqual(res.body.user.email, user.email);
       assert.strictEqual(res.body.habits.length, 2);
       assert.deepStrictEqual(res.body.habits[0].entries, [
-        { entry_date: '2026-03-02', completed: true, note: 'first' },
-        { entry_date: '2026-03-03', completed: true, note: '' },
+        { entry_date: '2026-03-02', completed: true, note: 'first', value: null },
+        { entry_date: '2026-03-03', completed: true, note: '', value: null },
       ]);
       assert.strictEqual(res.body.habits[1].archived, true);
       assert.strictEqual(res.body.habits[1].times_per_week, 2);
@@ -392,7 +392,7 @@ describe('Habit schedules, lists, archive, stats and export', { skip: skipReason
       assert.strictEqual(res.status, 200);
       assert.match(res.type, /text\/csv/);
       const lines = res.text.split('\r\n');
-      assert.strictEqual(lines[0], 'habit,frequency,archived,entry_date,completed,note');
+      assert.strictEqual(lines[0], 'habit,frequency,archived,entry_date,completed,note,category,value,target,unit');
       assert.ok(res.text.includes('"Read, write",daily,false,2026-03-01,true,"said ""hi"", then left"'));
       assert.ok(res.text.includes('"Read, write",daily,false,2026-03-02,true,\'=SUM(A1)'), 'formulas are defused');
       assert.ok(res.text.includes('2026-03-03,true,"line one\nline two"'));

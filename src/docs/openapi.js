@@ -26,6 +26,15 @@ const common = {
 };
 const pick = (...codes) => Object.fromEntries(codes.map((c) => [c, common[c]]));
 
+const categoryProp = {
+  category: { type: 'string', nullable: true, maxLength: 30, description: 'Optional label such as "Health". Send null or an empty string to clear it.' },
+};
+
+const goalProps = {
+  target: { type: 'number', nullable: true, minimum: 0.01, maximum: 1000000, description: 'Optional numeric daily goal, e.g. 8. A day is done when the logged value reaches it. Send null to remove the goal.' },
+  unit: { type: 'string', nullable: true, maxLength: 20, description: 'What the target is measured in, e.g. "glasses". Ignored without a target.' },
+};
+
 const habitScheduleProps = {
   frequency: { type: 'string', enum: ['daily', 'days', 'weekly'], description: 'daily = every day; days = chosen weekdays; weekly = N times per week.' },
   days_of_week: { type: 'array', nullable: true, items: { type: 'integer', minimum: 0, maximum: 6 }, description: '0 = Sunday ... 6 = Saturday. Required when frequency is "days".' },
@@ -88,6 +97,8 @@ const spec = {
           id: { type: 'integer' },
           name: { type: 'string' },
           description: { type: 'string' },
+          ...categoryProp,
+          ...goalProps,
           ...habitScheduleProps,
           archived: { type: 'boolean' },
           archived_at: { type: 'string', format: 'date-time', nullable: true },
@@ -101,6 +112,8 @@ const spec = {
         properties: {
           name: { type: 'string', minLength: 1, maxLength: 100 },
           description: { type: 'string', maxLength: 500 },
+          ...categoryProp,
+          ...goalProps,
           ...habitScheduleProps,
         },
         example: { name: 'Gym', frequency: 'days', days_of_week: [1, 3, 5] },
@@ -111,6 +124,8 @@ const spec = {
         properties: {
           name: { type: 'string', minLength: 1, maxLength: 100 },
           description: { type: 'string', maxLength: 500 },
+          ...categoryProp,
+          ...goalProps,
           ...habitScheduleProps,
         },
       },
@@ -126,6 +141,7 @@ const spec = {
           entry_date: { type: 'string', format: 'date' },
           completed: { type: 'boolean' },
           note: { type: 'string' },
+          value: { type: 'number', nullable: true, description: 'Amount logged, for habits with a numeric goal.' },
           created_at: { type: 'string', format: 'date-time' },
         },
       },
@@ -135,6 +151,11 @@ const spec = {
           entry_date: { type: 'string', format: 'date', description: 'Defaults to today. Not more than one day ahead of UTC.' },
           completed: { type: 'boolean', default: true },
           note: { type: 'string', maxLength: 500 },
+          value: {
+            type: 'number',
+            minimum: 0,
+            description: 'Amount done, only for habits with a target. The day counts as completed when value reaches the target (completed is then ignored). Without it, a completed check-in counts as the full target.',
+          },
         },
       },
       Streak: {
@@ -194,6 +215,7 @@ const spec = {
               streak_unit: { type: 'string', enum: ['day', 'week'] },
               completion_rate_30: { type: 'integer', nullable: true },
               completed_today: { type: 'boolean' },
+              value_today: { type: 'number', nullable: true, description: 'Amount logged today, for habits with a numeric goal.' },
               required_today: { type: 'boolean', description: 'False on rest days and for weekly goals.' },
               week_count: { type: 'integer' },
               week_goal: { type: 'integer', nullable: true },
@@ -222,6 +244,14 @@ const spec = {
             properties: { habit_id: { type: 'integer' }, name: { type: 'string' }, streak: { type: 'integer' }, unit: { type: 'string' } },
           },
           by_weekday: { type: 'array', items: { type: 'object', properties: { day: { type: 'integer', description: '0 = Sunday ... 6 = Saturday' }, name: { type: 'string' }, completed: { type: 'integer' } } } },
+          by_category: {
+            type: 'array',
+            description: 'Empty unless at least one habit has a category. Habits without one appear with category null.',
+            items: {
+              type: 'object',
+              properties: { category: { type: 'string', nullable: true }, habits: { type: 'integer' }, checkins: { type: 'integer' }, rate_30: { type: 'integer', nullable: true } },
+            },
+          },
           activity: {
             type: 'array',
             description: 'Check-ins per day for the last 12 weeks, oldest first.',
@@ -236,6 +266,7 @@ const spec = {
                 id: { type: 'integer' },
                 name: { type: 'string' },
                 frequency: { type: 'string', enum: ['daily', 'days', 'weekly'] },
+                category: { type: 'string', nullable: true },
                 current_streak: { type: 'integer' },
                 longest_streak: { type: 'integer' },
                 streak_unit: { type: 'string', enum: ['day', 'week'] },
@@ -311,6 +342,7 @@ const spec = {
           { name: 'q', in: 'query', schema: { type: 'string', maxLength: 100 }, description: 'Search names and descriptions (case-insensitive).' },
           { name: 'archived', in: 'query', schema: { type: 'string', enum: ['true', 'false', 'all'], default: 'false' } },
           { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['daily', 'days', 'weekly'] } },
+          { name: 'category', in: 'query', schema: { type: 'string', maxLength: 30 }, description: 'Only habits in this category (case-insensitive).' },
         ],
         responses: {
           200: resp('A page of habits.', { type: 'object', properties: { habits: { type: 'array', items: ref('Habit') }, pagination: ref('Pagination') } }),
@@ -323,6 +355,18 @@ const spec = {
         security: secured,
         requestBody: { required: true, content: json(ref('HabitInput')) },
         responses: { 201: resp('Created.', { type: 'object', properties: { habit: ref('Habit') } }), ...pick(400, 401) },
+      },
+    },
+    '/api/habits/categories': {
+      get: {
+        tags: ['Habits'],
+        summary: 'Your categories',
+        description: 'Categories used by your active habits, alphabetical, with how many habits each has.',
+        security: secured,
+        responses: {
+          200: resp('Categories.', { type: 'object', properties: { categories: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, habits: { type: 'integer' } } } } } }),
+          ...pick(401),
+        },
       },
     },
     '/api/habits/summary': {

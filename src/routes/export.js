@@ -37,12 +37,13 @@ router.get(
     res.setHeader('Cache-Control', 'no-store');
 
     if (req.query.format === 'csv') {
-      const lines = [['habit', 'frequency', 'archived', 'entry_date', 'completed', 'note'].join(',')];
+      const lines = [['habit', 'frequency', 'archived', 'entry_date', 'completed', 'note', 'category', 'value', 'target', 'unit'].join(',')];
       for (const h of habits) {
         const rows = byHabit.get(h.id);
         const base = [h.name, h.frequency, h.archived_at != null];
-        if (rows.length === 0) lines.push([...base, '', '', ''].map(csvCell).join(','));
-        for (const e of rows) lines.push([...base, e.entry_date, e.completed, e.note].map(csvCell).join(','));
+        const goal = [h.target, h.target != null ? h.unit : ''];
+        if (rows.length === 0) lines.push([...base, '', '', '', h.category, '', ...goal].map(csvCell).join(','));
+        for (const e of rows) lines.push([...base, e.entry_date, e.completed, e.note, h.category, e.value, ...goal].map(csvCell).join(','));
       }
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="habit-tracker-${stamp}.csv"`);
@@ -55,7 +56,7 @@ router.get(
       user: { email: user.email },
       habits: habits.map((h) => ({
         ...habitJson(h),
-        entries: byHabit.get(h.id).map((e) => ({ entry_date: e.entry_date, completed: e.completed, note: e.note })),
+        entries: byHabit.get(h.id).map((e) => ({ entry_date: e.entry_date, completed: e.completed, note: e.note, value: e.value })),
       })),
     });
   })

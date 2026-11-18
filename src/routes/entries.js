@@ -14,6 +14,7 @@ const router = express.Router({ mergeParams: true });
 const entrySchema = z.object({
   entry_date: isoDate.optional(),
   completed: z.boolean({ invalid_type_error: 'completed must be true or false.' }).optional().default(true),
+  value: z.number({ invalid_type_error: 'value must be a number.' }).min(0, 'value cannot be negative.').max(1000000, 'value must be 1,000,000 or less.').optional(),
   note: z.string().trim().max(500, 'Note must be 500 characters or fewer.').optional().default(''),
 });
 
@@ -47,18 +48,33 @@ router.post(
   validate(entrySchema),
   asyncHandler(async (req, res) => {
     if (req.habit.archived_at) throw new AppError(409, 'This habit is archived. Restore it before logging check-ins.');
-    const { completed, note } = req.body;
+    const { note } = req.body;
+    const { target } = req.habit;
+    if (req.body.value !== undefined && target == null) {
+      throw new AppError(400, 'Validation failed.', [{ field: 'value', message: 'This habit has no numeric goal. Give the habit a target first.' }]);
+    }
+    // With a numeric goal, the amount decides whether the day is done. A plain "done" counts as the full target.
+    let { completed } = req.body;
+    let value = null;
+    if (target != null) {
+      if (req.body.value !== undefined) {
+        value = req.body.value;
+        completed = value >= target;
+      } else if (completed) {
+        value = target;
+      }
+    }
     const date = req.body.entry_date || utcToday();
     // Allow one day of slack so users ahead of UTC can log their own "today".
     if (date > addDays(utcToday(), 1)) throw new AppError(400, 'Cannot record progress for a future date.');
 
     const { rows } = await db.query(
-      `INSERT INTO entries (habit_id, entry_date, completed, note)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO entries (habit_id, entry_date, completed, note, value)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (habit_id, entry_date)
-       DO UPDATE SET completed = EXCLUDED.completed, note = EXCLUDED.note
+       DO UPDATE SET completed = EXCLUDED.completed, note = EXCLUDED.note, value = EXCLUDED.value
        RETURNING *, (xmax = 0) AS inserted`,
-      [req.habit.id, date, completed, note]
+      [req.habit.id, date, completed, note, value]
     );
     const { inserted, ...entry } = rows[0];
     res.status(inserted ? 201 : 200).json({ entry });

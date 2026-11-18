@@ -20,10 +20,11 @@ let seed = 42;
 const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
 
 const HABITS = [
-  { name: 'Read for 20 minutes', description: 'Evenings, before bed', frequency: 'daily', chance: (age) => (age < 14 ? 0.95 : 0.72) },
-  { name: 'Gym', description: 'Push, pull, legs', frequency: 'days', days: [1, 3, 5], chance: () => 0.85, onlyDays: true },
-  { name: 'Run', description: '', frequency: 'weekly', times: 3, chance: () => 0.42 },
-  { name: 'Practice Swahili', description: 'Flashcards on the bus', frequency: 'daily', chance: (age) => (age < 5 ? 1 : 0.55) },
+  { name: 'Read for 20 minutes', description: 'Evenings, before bed', category: 'Study', frequency: 'daily', chance: (age) => (age < 14 ? 0.95 : 0.72) },
+  { name: 'Gym', description: 'Push, pull, legs', category: 'Health', frequency: 'days', days: [1, 3, 5], chance: () => 0.85, onlyDays: true },
+  { name: 'Run', description: '', category: 'Health', frequency: 'weekly', times: 3, chance: () => 0.42 },
+  { name: 'Practice Swahili', description: 'Flashcards on the bus', category: 'Study', frequency: 'daily', chance: (age) => (age < 5 ? 1 : 0.55) },
+  { name: 'Drink water', description: 'Keep a bottle at your desk', category: 'Health', frequency: 'daily', target: 8, unit: 'glasses', chance: () => 0.8 },
   { name: 'Old journaling habit', description: 'Archived example', frequency: 'daily', chance: () => 0.5, archived: true },
 ];
 const NOTES = ['Felt great', 'Short session', 'Finished a chapter', 'Tired but did it', ''];
@@ -39,15 +40,17 @@ const NOTES = ['Felt great', 'Short session', 'Finished a chapter', 'Tired but d
   for (const h of HABITS) {
     const created = `${addDays(today, -70)}T12:00:00Z`;
     const res = await pool.query(
-      `INSERT INTO habits (user_id, name, description, frequency, days_of_week, times_per_week, archived_at, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-      [userId, h.name, h.description, h.frequency, h.days || null, h.times || null, h.archived ? new Date() : null, created]
+      `INSERT INTO habits (user_id, name, description, category, target, unit, frequency, days_of_week, times_per_week, archived_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      [userId, h.name, h.description, h.category || null, h.target || null, h.unit || null, h.frequency, h.days || null, h.times || null, h.archived ? new Date() : null, created]
     );
     for (let age = 69; age >= 0; age--) {
       const date = addDays(today, -age);
       if (h.onlyDays && !h.days.includes(dayOfWeek(date))) continue;
       if (rnd() > h.chance(age)) continue;
-      await pool.query('INSERT INTO entries (habit_id, entry_date, completed, note) VALUES ($1,$2,true,$3)', [res.rows[0].id, date, NOTES[Math.floor(rnd() * NOTES.length)]]);
+      // Habits with a goal get a realistic amount: usually the target or a bit over.
+      const value = h.target ? Math.max(1, Math.round(h.target * (0.85 + rnd() * 0.45))) : null;
+      await pool.query('INSERT INTO entries (habit_id, entry_date, completed, note, value) VALUES ($1,$2,$3,$4,$5)', [res.rows[0].id, date, h.target ? value >= h.target : true, NOTES[Math.floor(rnd() * NOTES.length)], value]);
       entries++;
     }
   }

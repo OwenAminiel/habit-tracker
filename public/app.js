@@ -57,7 +57,7 @@
   const state = {
     token: store.get(), user: null, today: isoLocal(new Date()), habits: [],
     detailId: null, detailEntries: [], detailStats: null,
-    view: 'today', archived: null, showArchived: false, overview: null,
+    view: 'today', filter: null, archived: null, showArchived: false, overview: null,
   };
 
   /* ---------- Schedules ---------- */
@@ -252,6 +252,7 @@
     state.user = null;
     state.habits = [];
     state.view = 'today';
+    state.filter = null;
     state.archived = null;
     state.showArchived = false;
     store.clear();
@@ -324,12 +325,15 @@
   function renderDashboard(focusId) {
     state.view = 'today';
     // Habits with a fixed day count towards "today" only when that day is one of their days (or already done).
-    const due = state.habits.filter((x) => x.required_today || x.completed_today);
+    const categories = [...new Set(state.habits.map((x) => x.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    if (state.filter && !categories.includes(state.filter)) state.filter = null;
+    const shown = state.filter ? state.habits.filter((x) => x.category === state.filter) : state.habits;
+    const due = shown.filter((x) => x.required_today || x.completed_today);
     const done = due.filter((x) => x.completed_today).length;
     const total = due.length;
 
     const sub =
-      state.habits.length === 0
+      shown.length === 0
         ? 'Nothing to check in yet.'
         : total === 0
           ? 'Nothing is due today. Enjoy the rest day.'
@@ -346,7 +350,7 @@
             h('p', { class: 'empty__text', text: 'Add something you want to do. Each check-in adds a link to its chain.' }),
             h('button', { class: 'btn', type: 'button', onclick: openNewHabit, text: 'Add your first habit' })
           )
-        : h('ul', { class: 'habits', 'aria-label': 'Your habits' }, state.habits.map(habitRow));
+        : h('ul', { class: 'habits', 'aria-label': 'Your habits' }, shown.map(habitRow));
 
     $app.replaceChildren(
       ...shell(
@@ -361,6 +365,7 @@
           ),
           state.habits.length > 0 ? h('button', { class: 'btn', type: 'button', onclick: openNewHabit, text: 'New habit' }) : null
         ),
+        categoryChips(categories),
         list,
         archivedSection()
       )
@@ -370,6 +375,17 @@
       const target = $app.querySelector(`.check[data-id="${focusId}"]`);
       if (target) target.focus();
     }
+  }
+
+  /* Filter chips: shown once at least one habit has a category. */
+  function categoryChips(categories) {
+    if (categories.length === 0) return null;
+    const chip = (label, value) =>
+      h('button', {
+        class: 'chip', type: 'button', text: label, 'aria-pressed': String(state.filter === value),
+        onclick: () => { state.filter = value; renderDashboard(); },
+      });
+    return h('div', { class: 'chips', role: 'group', 'aria-label': 'Filter by category' }, chip('All', null), categories.map((c) => chip(c, c)));
   }
 
   function habitRow(habit) {
@@ -384,13 +400,18 @@
       {
         class: 'check', type: 'button', dataset: { id: habit.id },
         'aria-pressed': String(habit.completed_today),
-        'aria-label': `${habit.name}: done today`,
-        onclick: () => toggleDay(habit, state.today, true),
+        'aria-label': habit.target != null && !habit.completed_today ? `${habit.name}: log today's amount` : `${habit.name}: done today`,
+        onclick: () => (habit.target != null && !habit.completed_today ? openAmount(habit, state.today, habit.value_today, true) : toggleDay(habit, state.today, true)),
       },
       checkIcon()
     );
 
     const meta = [h('span', { class: 'tag', text: scheduleText(habit) })];
+    if (habit.target != null) {
+      const got = habit.value_today ?? 0;
+      meta.push(h('span', { class: got >= habit.target ? 'tag tag--met' : 'tag tag--goal', text: `Today: ${got} / ${habit.target}${habit.unit ? ` ${habit.unit}` : ''}` }));
+    }
+    if (habit.category) meta.unshift(h('span', { class: 'tag tag--cat', text: habit.category }));
     if (rest) meta.push(h('span', { class: 'tag tag--rest', text: 'Rest day' }));
     if (habit.frequency === 'weekly') {
       const met = habit.week_count >= habit.week_goal;
@@ -505,7 +526,7 @@
         h('p', { class: 'empty__text', text: 'Add a habit and check in a few times. Your trends will show up here.' }),
         h('button', { class: 'btn', type: 'button', onclick: () => go('today'), text: 'Go to Today' }));
     } else {
-      body = [cards, heatmap(o), weekdayBars(o), habitRates(o)];
+      body = [cards, heatmap(o), weekdayBars(o), categoryRates(o), habitRates(o)];
     }
 
     $app.replaceChildren(
@@ -531,7 +552,7 @@
     const dow = ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((c) => h('span', { class: 'heatgrid__dow', 'aria-hidden': 'true', text: c }));
     return h('section', { class: 'panel' },
       h('h2', { class: 'panel__title', text: 'Last 12 weeks' }),
-      h('p', { class: 'sheet__note', text: `${total} ${total === 1 ? 'check-in' : 'check-ins'}. Darker squares mean more of your habits were done that day.` }),
+      h('p', { class: 'sheet__note', text: `${total} ${total === 1 ? 'check-in' : 'check-ins'}. The stronger the colour, the more of your habits were done that day.` }),
       h('div', { class: 'heatwrap', role: 'img', 'aria-label': `Heat map of check-ins for the last 12 weeks, ${total} in total.` },
         h('div', { class: 'heatgrid' }, dow, cells)),
       h('div', { class: 'legend', 'aria-hidden': 'true' },
@@ -552,6 +573,20 @@
             h('span', { class: 'bar__value', text: String(d.completed) })))));
   }
 
+  function categoryRates(o) {
+    if (!o.by_category || o.by_category.length === 0) return null;
+    return h('section', { class: 'panel' },
+      h('h2', { class: 'panel__title', text: 'By category (last 30 days)' }),
+      h('ul', { class: 'bars bars--wide' },
+        o.by_category.map((c) => {
+          const r = c.rate_30;
+          return h('li', { class: 'bar bar--habit' },
+            h('span', { class: 'bar__label' }, h('strong', { text: c.category || 'No category' }), h('span', { class: 'tag', text: `${c.habits} ${c.habits === 1 ? 'habit' : 'habits'}` })),
+            h('span', { class: 'bar__track' }, h('span', { class: r != null && r < 40 ? 'bar__fill bar__fill--low' : 'bar__fill', style: `width:${r == null ? 0 : r}%` })),
+            h('span', { class: 'bar__value', text: r == null ? '–' : `${r}%` }));
+        })));
+  }
+
   function habitRates(o) {
     if (!o.habits.length) return null;
     return h('section', { class: 'panel' },
@@ -567,6 +602,19 @@
   }
 
   /* ---------- Settings ---------- */
+
+  /* Light, dark, or follow the device. The choice is remembered by theme.js. */
+  function appearanceChoice() {
+    const current = window.HabitTheme ? window.HabitTheme.get() : 'system';
+    const name = `theme${Math.random().toString(36).slice(2, 7)}`;
+    return h('fieldset', { class: 'schedule' },
+      h('legend', { class: 'sr-only', text: 'Colour theme' }),
+      h('div', { class: 'choices' },
+        [['system', 'Match my device'], ['light', 'Light'], ['dark', 'Dark']].map(([value, label]) =>
+          h('label', { class: 'choice' },
+            h('input', { type: 'radio', name, value, checked: value === current, onchange: () => window.HabitTheme && window.HabitTheme.set(value) }),
+            h('span', { text: label })))));
+  }
 
   function renderSettings() {
     state.view = 'settings';
@@ -661,6 +709,7 @@
         h('div', { class: 'page__head' }, h('div', {}, h('h1', { class: 'page__title', text: 'Settings' }),
           h('p', { class: 'page__sub', text: state.user ? `Signed in as ${state.user.email}` : '' }))),
         h('div', { class: 'settings' },
+          panel('Appearance', appearanceChoice()),
           panel('Password', pwForm),
           panel('Sessions', h('p', { class: 'sheet__note', text: 'Signs you out of this browser and every other device where you are logged in.' }), logoutAll),
           panel('Your data', h('p', { class: 'sheet__note', text: 'Download every habit and check-in, including archived habits.' }),
@@ -670,6 +719,38 @@
           panel('Delete account', dangerBox))
       )
     );
+  }
+
+  /* Log how much was done on a day, for habits with a numeric goal. */
+  function openAmount(habit, date, current, fromDashboard) {
+    const unit = habit.unit ? ` ${habit.unit}` : '';
+    const error = h('p', { class: 'form__error', role: 'alert' });
+    const input = h('input', { class: 'input', id: 'amount', type: 'number', min: '0', step: 'any', inputmode: 'decimal', required: true, value: current != null ? String(current) : '' });
+    const save = h('button', { class: 'btn', type: 'submit', text: 'Save' });
+    const send = async (value) => {
+      error.textContent = '';
+      save.disabled = true;
+      try {
+        await api(`/api/habits/${habit.id}/entries`, { method: 'POST', body: { entry_date: date, value } });
+        $dialog.close();
+        if (fromDashboard) await loadDashboard(habit.id); else await refreshDetail();
+        toast(value >= habit.target ? 'Goal reached' : 'Progress saved');
+      } catch (err) {
+        error.textContent = err.message;
+        save.disabled = false;
+      }
+    };
+    showSheet(
+      h('div', { class: 'sheet__head' }, h('h2', { class: 'sheet__title', id: 'dialog-title', text: habit.name }), closeButton()),
+      h('form', { class: 'form', novalidate: true, onsubmit: (e) => { e.preventDefault(); send(Number(input.value)); } },
+        h('p', { class: 'sheet__note', text: `Goal: ${habit.target}${unit} on ${fmt(date, { weekday: 'long', month: 'long', day: 'numeric' })}.` }),
+        h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'amount', text: `How much${unit ? ` (${habit.unit})` : ''} did you do?` }), input),
+        error,
+        h('div', { class: 'form__actions' }, save, h('button', { class: 'btn btn--quiet', type: 'button', text: `Mark goal reached (${habit.target}${unit})`, onclick: () => send(habit.target) }))
+      )
+    );
+    input.focus();
+    input.select();
   }
 
   /* Check in, or undo, a single day. */
@@ -711,6 +792,38 @@
   }
 
   const closeButton = () => h('button', { class: 'btn btn--quiet btn--small', type: 'button', onclick: () => $dialog.close(), text: 'Close' });
+
+  /* Category: free text with suggestions from the categories already in use. */
+  function categoryField(initial) {
+    const listId = `cats${Math.random().toString(36).slice(2, 7)}`;
+    const known = [...new Set(state.habits.map((x) => x.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const input = h('input', { class: 'input', id: `${listId}-in`, maxlength: '30', list: listId, value: initial || '', placeholder: 'Health, Study, Work…', autocomplete: 'off' });
+    return {
+      el: h('div', { class: 'field' },
+        h('label', { class: 'field__label', for: `${listId}-in`, text: 'Category (optional)' }),
+        input,
+        h('datalist', { id: listId }, known.map((c) => h('option', { value: c })))),
+      value: () => input.value,
+    };
+  }
+
+  /* Numeric goal: optional "how much counts as done" with a unit. */
+  function goalField(habit = {}) {
+    const uid = `goal${Math.random().toString(36).slice(2, 7)}`;
+    const on = h('input', { type: 'checkbox', id: `${uid}-on`, checked: habit.target != null });
+    const target = h('input', { class: 'input', id: `${uid}-t`, type: 'number', min: '0', step: 'any', inputmode: 'decimal', value: habit.target != null ? String(habit.target) : '', placeholder: '8', 'aria-label': 'Daily target' });
+    const unit = h('input', { class: 'input', id: `${uid}-u`, maxlength: '20', value: habit.unit || '', placeholder: 'glasses', 'aria-label': 'Unit' });
+    const row = h('div', { class: 'goal__row' }, target, unit);
+    const sync = () => { row.hidden = !on.checked; };
+    on.addEventListener('change', sync);
+    sync();
+    return {
+      el: h('div', { class: 'field goal' },
+        h('label', { class: 'check-line', for: `${uid}-on` }, on, h('span', { text: 'Measure with a number (for example 8 glasses of water)' })),
+        row),
+      value: () => (on.checked ? { target: target.value === '' ? null : Number(target.value), unit: unit.value } : { target: null }),
+    };
+  }
 
   /* Schedule picker: every day, certain weekdays, or a number of times a week. */
   function schedulePicker(initial = {}) {
@@ -757,6 +870,8 @@
     const desc = h('textarea', { class: 'input', id: 'new-desc', maxlength: '500' });
     const save = h('button', { class: 'btn', type: 'submit', text: 'Add habit' });
     const picker = schedulePicker();
+    const cat = categoryField(state.filter);
+    const goal = goalField();
 
     showSheet(
       h('div', { class: 'sheet__head' }, h('h2', { class: 'sheet__title', id: 'dialog-title', text: 'New habit' }), closeButton()),
@@ -769,7 +884,7 @@
             error.textContent = '';
             save.disabled = true;
             try {
-              await api('/api/habits', { method: 'POST', body: { name: name.value, description: desc.value, ...picker.value() } });
+              await api('/api/habits', { method: 'POST', body: { name: name.value, description: desc.value, category: cat.value(), ...goal.value(), ...picker.value() } });
               $dialog.close();
               await loadDashboard();
               toast('Habit added');
@@ -781,6 +896,8 @@
         },
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'new-name', text: 'Name' }), name),
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'new-desc', text: 'Notes (optional)' }), desc),
+        cat.el,
+        goal.el,
         picker.el,
         error,
         h('div', { class: 'form__actions' }, save)
@@ -878,6 +995,7 @@
     const logError = h('p', { class: 'form__error', role: 'alert' });
     const logDate = h('input', { class: 'input', id: 'log-date', type: 'date', value: state.today, max: state.today, required: true });
     const logNote = h('input', { class: 'input', id: 'log-note', maxlength: '500', placeholder: 'Optional' });
+    const logValue = habit.target != null ? h('input', { class: 'input', id: 'log-value', type: 'number', min: '0', step: 'any', inputmode: 'decimal', placeholder: String(habit.target) }) : null;
     const logBtn = h('button', { class: 'btn', type: 'submit', text: 'Save check-in' });
     const logForm = h(
       'form',
@@ -888,7 +1006,7 @@
           logError.textContent = '';
           logBtn.disabled = true;
           try {
-            await api(`/api/habits/${habit.id}/entries`, { method: 'POST', body: { entry_date: logDate.value, completed: true, note: logNote.value } });
+            await api(`/api/habits/${habit.id}/entries`, { method: 'POST', body: { entry_date: logDate.value, completed: true, note: logNote.value, ...(logValue && logValue.value !== '' ? { value: Number(logValue.value) } : {}) } });
             await refreshDetail();
             toast('Check-in saved');
           } catch (err) {
@@ -899,8 +1017,9 @@
       },
       h(
         'div',
-        { class: 'log-row' },
+        { class: logValue ? 'log-row log-row--amount' : 'log-row' },
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'log-date', text: 'Day' }), logDate),
+        logValue ? h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'log-value', text: habit.unit ? `Amount (${habit.unit})` : 'Amount' }), logValue) : null,
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'log-note', text: 'Note' }), logNote),
         logBtn
       ),
@@ -908,7 +1027,7 @@
     );
 
     /* History */
-    const done = entries.filter((e) => e.completed).sort((a, b) => (a.entry_date < b.entry_date ? 1 : -1));
+    const done = entries.filter((e) => e.completed || (habit.target != null && e.value != null)).sort((a, b) => (a.entry_date < b.entry_date ? 1 : -1));
     const history =
       done.length === 0
         ? h('p', { class: 'sheet__note', text: 'No check-ins in the last six weeks.' })
@@ -920,6 +1039,7 @@
                 'li',
                 { class: 'history__item' },
                 h('span', { class: 'history__date', text: fmt(e.entry_date, { weekday: 'short', month: 'short', day: 'numeric' }) }),
+                habit.target != null && e.value != null ? h('span', { class: e.completed ? 'tag tag--met history__amount' : 'tag history__amount', text: `${e.value} / ${habit.target}${habit.unit ? ` ${habit.unit}` : ''}` }) : null,
                 e.note ? h('span', { class: 'history__note', text: e.note }) : null,
                 h('button', {
                   class: 'btn btn--quiet btn--small', type: 'button', text: 'Remove',
@@ -937,6 +1057,8 @@
     desc.value = habit.description || '';
     const editBtn = h('button', { class: 'btn', type: 'submit', text: 'Save changes' });
     const picker = schedulePicker(habit);
+    const cat = categoryField(habit.category);
+    const goal = goalField(habit);
     const editForm = h(
       'form',
       {
@@ -946,7 +1068,7 @@
           editError.textContent = '';
           editBtn.disabled = true;
           try {
-            await api(`/api/habits/${habit.id}`, { method: 'PUT', body: { name: name.value, description: desc.value, ...picker.value() } });
+            await api(`/api/habits/${habit.id}`, { method: 'PUT', body: { name: name.value, description: desc.value, category: cat.value(), ...goal.value(), ...picker.value() } });
             await refreshDetail();
             toast('Changes saved');
           } catch (err) {
@@ -957,6 +1079,8 @@
       },
       h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'edit-name', text: 'Name' }), name),
       h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'edit-desc', text: 'Notes' }), desc),
+      cat.el,
+      goal.el,
       picker.el,
       editError,
       h('div', { class: 'form__actions' }, editBtn)

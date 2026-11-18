@@ -5,7 +5,7 @@ const { validate } = require('../middleware/validate');
 const { requireAuth } = require('../middleware/auth');
 const { AppError, asyncHandler } = require('../utils/errors');
 const { isoDate, utcToday, addDays, weekStart, eachDay } = require('../utils/dates');
-const { scheduleFields, habitJson, isRequired, resolveSchedule, FREQUENCIES } = require('../utils/habits');
+const { scheduleFields, categoryField, goalFields, resolveGoal, habitJson, isRequired, resolveSchedule, FREQUENCIES } = require('../utils/habits');
 const { habitStats } = require('../utils/stats');
 const { pageParams, pagination } = require('../utils/pagination');
 const { loadHabitsWithDone } = require('../services/habitData');
@@ -17,6 +17,9 @@ router.use(requireAuth);
 const createSchema = z.object({
   name: z.string().trim().min(1, 'Name is required.').max(100, 'Name must be 100 characters or fewer.'),
   description: z.string().trim().max(500, 'Description must be 500 characters or fewer.').optional().default(''),
+  category: categoryField.optional(),
+  target: goalFields.target.optional(),
+  unit: goalFields.unit.optional(),
   frequency: scheduleFields.frequency.optional(),
   days_of_week: scheduleFields.days_of_week.nullable().optional(),
   times_per_week: scheduleFields.times_per_week.nullable().optional(),
@@ -26,6 +29,9 @@ const updateSchema = z
   .object({
     name: z.string().trim().min(1, 'Name is required.').max(100, 'Name must be 100 characters or fewer.').optional(),
     description: z.string().trim().max(500, 'Description must be 500 characters or fewer.').optional(),
+    category: categoryField.optional(),
+    target: goalFields.target.optional(),
+    unit: goalFields.unit.optional(),
     frequency: scheduleFields.frequency.optional(),
     days_of_week: scheduleFields.days_of_week.nullable().optional(),
     times_per_week: scheduleFields.times_per_week.nullable().optional(),
@@ -39,7 +45,15 @@ const listQuery = z.object({
   q: z.string().trim().max(100).optional(),
   archived: z.enum(['true', 'false', 'all'], { errorMap: () => ({ message: 'archived must be true, false or all.' }) }).default('false'),
   frequency: z.enum(FREQUENCIES, { errorMap: () => ({ message: 'frequency must be daily, days or weekly.' }) }).optional(),
+  category: z.string().trim().min(1, 'category must not be empty.').max(30).optional(),
 });
+
+// Reuse the spelling of an existing category ("health" becomes "Health") so one label never splits in two.
+async function canonicalCategory(userId, input) {
+  if (input == null) return null;
+  const { rows } = await db.query('SELECT category FROM habits WHERE user_id = $1 AND LOWER(category) = LOWER($2) LIMIT 1', [userId, input]);
+  return rows[0] ? rows[0].category : input;
+}
 
 // Loads the habit and makes sure it belongs to the logged-in user.
 const loadHabit = asyncHandler(async (req, res, next) => {
@@ -56,7 +70,7 @@ router.get(
   '/',
   validate(listQuery, 'query'),
   asyncHandler(async (req, res) => {
-    const { page, limit, sort, order, q, archived, frequency } = req.query;
+    const { page, limit, sort, order, q, archived, frequency, category } = req.query;
     const where = ['user_id = $1'];
     const params = [req.user.id];
     if (archived === 'true') where.push('archived_at IS NOT NULL');
@@ -64,6 +78,10 @@ router.get(
     if (frequency) {
       params.push(frequency);
       where.push(`frequency = $${params.length}`);
+    }
+    if (category) {
+      params.push(category);
+      where.push(`LOWER(category) = LOWER($${params.length})`);
     }
     if (q) {
       params.push(`%${q.replace(/[\\%_]/g, '\\$&')}%`);
@@ -83,6 +101,20 @@ router.get(
   })
 );
 
+// The user's categories (active habits only), for pickers and filter chips.
+router.get(
+  '/categories',
+  asyncHandler(async (req, res) => {
+    const { rows } = await db.query(
+      `SELECT MIN(category) AS name, COUNT(*)::int AS habits FROM habits
+       WHERE user_id = $1 AND category IS NOT NULL AND archived_at IS NULL
+       GROUP BY LOWER(category) ORDER BY LOWER(MIN(category))`,
+      [req.user.id]
+    );
+    res.json({ categories: rows });
+  })
+);
+
 // One request for the dashboard: every active habit with streaks, today's status and the last 14 days.
 router.get(
   '/summary',
@@ -90,6 +122,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const today = req.query.today || utcToday();
     const { habits, done } = await loadHabitsWithDone(req.user.id);
+    const valueToday = new Map(
+      (await db.query('SELECT e.habit_id, e.value FROM entries e JOIN habits h ON h.id = e.habit_id WHERE h.user_id = $1 AND e.entry_date = $2 AND e.value IS NOT NULL', [req.user.id, today])).rows.map((r) => [r.habit_id, r.value])
+    );
     const days = eachDay(addDays(today, -13), today);
     const thisWeek = eachDay(weekStart(today), addDays(weekStart(today), 6));
 
@@ -108,6 +143,7 @@ router.get(
           streak_unit: stats.streak_unit,
           completion_rate_30: stats.completion_rate.days_30,
           completed_today: set.has(today),
+          value_today: valueToday.get(h.id) ?? null,
           required_today: isRequired(h, today),
           week_count: thisWeek.filter((d) => set.has(d)).length,
           week_goal: h.frequency === 'weekly' ? h.times_per_week : null,
@@ -124,10 +160,12 @@ router.post(
   asyncHandler(async (req, res) => {
     const { name, description } = req.body;
     const schedule = resolveSchedule(null, req.body);
+    const category = await canonicalCategory(req.user.id, req.body.category);
+    const goal = resolveGoal(null, req.body);
     const { rows } = await db.query(
-      `INSERT INTO habits (user_id, name, description, frequency, days_of_week, times_per_week)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [req.user.id, name, description, schedule.frequency, schedule.days_of_week, schedule.times_per_week]
+      `INSERT INTO habits (user_id, name, description, category, target, unit, frequency, days_of_week, times_per_week)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [req.user.id, name, description, category, goal.target, goal.unit, schedule.frequency, schedule.days_of_week, schedule.times_per_week]
     );
     res.status(201).json({ habit: habitJson(rows[0]) });
   })
@@ -143,11 +181,18 @@ router.put(
     const name = req.body.name ?? req.habit.name;
     const description = req.body.description ?? req.habit.description;
     const schedule = resolveSchedule(req.habit, req.body);
+    const category = 'category' in req.body ? await canonicalCategory(req.user.id, req.body.category) : req.habit.category;
+    const goal = resolveGoal(req.habit, req.body);
     const { rows } = await db.query(
-      `UPDATE habits SET name = $1, description = $2, frequency = $3, days_of_week = $4, times_per_week = $5, updated_at = NOW()
-       WHERE id = $6 RETURNING *`,
-      [name, description, schedule.frequency, schedule.days_of_week, schedule.times_per_week, req.habit.id]
+      `UPDATE habits SET name = $1, description = $2, category = $3, target = $4, unit = $5,
+                         frequency = $6, days_of_week = $7, times_per_week = $8, updated_at = NOW()
+       WHERE id = $9 RETURNING *`,
+      [name, description, category, goal.target, goal.unit, schedule.frequency, schedule.days_of_week, schedule.times_per_week, req.habit.id]
     );
+    // A new target changes which logged amounts count as done, so re-judge them.
+    if (goal.target != null && Number(goal.target) !== Number(req.habit.target)) {
+      await db.query('UPDATE entries SET completed = (value >= $1) WHERE habit_id = $2 AND value IS NOT NULL', [goal.target, req.habit.id]);
+    }
     res.json({ habit: habitJson(rows[0]) });
   })
 );

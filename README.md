@@ -8,7 +8,7 @@ Built for COMP 4327 Back-end Web Development with Node.js, Express, PostgreSQL, 
 
 **API**
 - Registration and login with hashed passwords (bcrypt) and signed tokens (JWT); change password, log out of every device, delete account
-- Habits with schedules (daily, chosen weekdays, or N times a week), archive and restore
+- Habits with schedules (daily, chosen weekdays, or N times a week), optional categories, optional numeric goals ("8 glasses"), archive and restore
 - Daily check-ins with notes; streaks that respect the schedule (day streaks, or week streaks for weekly goals)
 - Statistics: completion rates (7, 30, 90 days), best weekdays, weekly history, milestone badges, and an overview across all habits
 - Pagination, sorting, search and filters on lists
@@ -17,9 +17,9 @@ Built for COMP 4327 Back-end Web Development with Node.js, Express, PostgreSQL, 
 - Rate limiting, security headers, request logging, versioned database migrations
 - Interactive API docs at `/docs` (OpenAPI 3), and a Postman collection
 
-**Web app** (white and blue, red for misses and deletes): Today, Insights (12-week heat map, best days, per-habit rates), Settings (password, sessions, export, delete account).
+**Web app** (white and blue, red for misses and deletes, with a dark theme): Today (with category filters), Insights (12-week heat map, best days, per-category and per-habit rates), Settings (theme, password, sessions, export, delete account).
 
-**Quality**: 83 automated tests (unit and API integration), ESLint, and a GitHub Actions workflow that runs both.
+**Quality**: 100+ automated tests (unit and API integration), ESLint, and a GitHub Actions workflow that runs both.
 
 ## Quick start
 
@@ -56,7 +56,9 @@ Run `npm install` and then `npm run db:init` before `npm start`. Existing habits
 3. A habit on certain days shows a **Rest day** tag on the other days, and a weekly goal shows progress such as "2 of 3 this week". Rest days never break a streak.
 4. Select a habit's name to open details: streaks, completion rates, milestone badges, a six-week calendar (select a day to add or remove its check-in), a form to log a day with a note, history, editing, **Archive**, and delete.
 5. **Show archived habits** at the bottom of Today lists archived habits so you can restore them.
-6. **Insights** shows your trends. **Settings** has change password, log out everywhere, JSON and CSV export, and delete account.
+6. **Category** is an optional label such as Health or Study. Once any habit has one, filter chips appear on Today and Insights adds a per-category breakdown.
+7. **Measure with a number** on the habit form gives a habit a daily target and unit, such as 8 glasses. The circle on Today then opens a small form to log how much you did, with a shortcut to mark the goal reached. A day counts as done once the amount reaches the target; smaller amounts are saved as progress and show in the history.
+8. **Insights** shows your trends. **Settings** has the theme (match your device, light, or dark), change password, log out everywhere, JSON and CSV export, and delete account.
 
 ## API reference
 
@@ -70,15 +72,16 @@ The interactive reference with every field and example is at `/docs`; the raw Op
 | PUT | `/api/auth/password` 🔒 | Change password `{current_password, new_password}`; signs out other sessions, returns a new token | 200 |
 | POST | `/api/auth/logout-all` 🔒 | Sign out of every device | 204 |
 | DELETE | `/api/auth/me` 🔒 | Delete the account and all its data `{password}` | 204 |
-| GET | `/api/habits` 🔒 | List habits: `page`, `limit`, `sort` (created_at, updated_at, name), `order`, `q` (search), `archived` (true, false, all), `frequency` | 200 |
-| POST | `/api/habits` 🔒 | Create `{name, description?, frequency?, days_of_week?, times_per_week?}` | 201 |
+| GET | `/api/habits` 🔒 | List habits: `page`, `limit`, `sort` (created_at, updated_at, name), `order`, `q` (search), `archived` (true, false, all), `frequency`, `category` | 200 |
+| GET | `/api/habits/categories` 🔒 | Your categories (active habits) with how many habits each has | 200 |
+| POST | `/api/habits` 🔒 | Create `{name, description?, category?, target?, unit?, frequency?, days_of_week?, times_per_week?}` | 201 |
 | GET | `/api/habits/summary?today=` 🔒 | Every active habit with streaks, today's status, weekly progress and the last 14 days | 200 |
 | GET | `/api/habits/:id` 🔒 | One habit | 200 |
 | PUT | `/api/habits/:id` 🔒 | Update any of the create fields | 200 |
 | DELETE | `/api/habits/:id` 🔒 | Delete the habit and its entries | 204 |
 | POST | `/api/habits/:id/archive` 🔒 | Archive (hides it, blocks new check-ins, keeps history) | 200 |
 | POST | `/api/habits/:id/restore` 🔒 | Restore an archived habit | 200 |
-| POST | `/api/habits/:id/entries` 🔒 | Record a day `{entry_date?, completed?, note?}`. Posting an existing date updates it | 201 new, 200 updated |
+| POST | `/api/habits/:id/entries` 🔒 | Record a day `{entry_date?, completed?, note?, value?}`. Posting an existing date updates it | 201 new, 200 updated |
 | GET | `/api/habits/:id/entries` 🔒 | History: `from`, `to`, `completed`, `order`, `page`, `limit` | 200 |
 | DELETE | `/api/habits/:id/entries/:date` 🔒 | Remove one day's entry | 204 |
 | GET | `/api/habits/:id/streak?today=` 🔒 | `current_streak`, `longest_streak`, `total_completed`, `last_completed`, `streak_unit` | 200 |
@@ -95,6 +98,12 @@ The interactive reference with every field and example is at `/docs`; the raw Op
 | `daily` (default) | none | Every day |
 | `days` | `days_of_week`: `[0-6]`, 0 = Sunday | Only these weekdays are expected |
 | `weekly` | `times_per_week`: 1–7 | Any N days in a week; weeks run Sunday to Saturday |
+
+### Categories and numeric goals
+
+- `category` is an optional label of up to 30 characters. Send `null` or an empty string to clear it. A category matches case-insensitively, and an existing spelling is reused, so `health` becomes `Health` if you already use that.
+- `target` (a positive number) and `unit` (up to 20 characters) give a habit a daily goal. When a habit has a target, `POST /entries` accepts `value`, the amount done, and the day is `completed` once `value` reaches the target. The `completed` flag you send is ignored when `value` is given, and a plain check-in without a value counts as the full target. Sending `value` for a habit without a target is a 400. Smaller amounts are stored as progress, do not extend streaks, and appear in the history.
+- Changing a habit's target re-judges its logged amounts against the new target. Removing the target (`null`) also removes the unit and keeps the logged values.
 
 ### Status codes and errors
 
@@ -151,9 +160,9 @@ On Windows PowerShell, use `Invoke-RestMethod` instead of `curl`, or use `/docs`
 
 ```
 users    id, email (unique), password_hash, token_version, created_at
-habits   id, user_id → users, name, description, frequency, days_of_week, times_per_week,
-         archived_at, created_at, updated_at
-entries  id, habit_id → habits, entry_date, completed, note, created_at
+habits   id, user_id → users, name, description, category, target, unit, frequency, days_of_week,
+         times_per_week, archived_at, created_at, updated_at
+entries  id, habit_id → habits, entry_date, completed, note, value, created_at
          unique (habit_id, entry_date)
 schema_migrations   which migrations have been applied
 ```
@@ -199,12 +208,24 @@ The server checks its configuration on start and prints every problem at once. I
 
 ## Deploying
 
-Deployment is not set up yet. When you are ready, any Node host with PostgreSQL works. Set the variables above (with `NODE_ENV=production` and `TRUST_PROXY=1`), run `npm run db:init` once against the production database, and use `npm start` as the start command and `/health` as the health check. `railway.json` holds Railway settings if you choose it.
+Any Node host with PostgreSQL works. The steps below use Render's free tier with your existing Supabase database; `render.yaml` describes the service.
+
+1. Push the project to GitHub.
+2. In Render, choose **New, Blueprint**, pick the repository, and apply `render.yaml`.
+3. When asked, paste `DATABASE_URL` (your Supabase **session pooler** string, with no brackets around the password). `JWT_SECRET` is generated for you; do not reuse the one from your laptop.
+4. Deploy. The start command runs `npm run db:init` first, so migrations are applied automatically, then starts the server. The health check is `/health`.
+5. Open the service URL for the web app and `/docs` for the API docs.
+
+On the free tier the service sleeps after a period of inactivity, so the first request after a pause can take about a minute. Open it a few minutes before a demo. For other hosts, set the variables in the Configuration table (with `NODE_ENV=production` and `TRUST_PROXY=1`), run `npm run db:init` once, use `npm start` as the start command and `/health` as the health check. `railway.json` holds Railway settings.
+
+### Demo data
+
+`npm run seed:demo` creates `demo@example.com` (password `demo-password-123`) with six habits (including categories and a numeric goal) and about ten weeks of history, which makes the Insights page worth showing. It refuses to run when `NODE_ENV=production` unless `ALLOW_DEMO_SEED=true`, and re-running it resets that account.
 
 ## Project structure
 
 ```
-public/                  Web app: index.html, styles.css, app.js (no build step)
+public/                  Web app: index.html, styles.css, app.js, theme.js (no build step)
 src/app.js, server.js    Express setup and entry point
 src/config.js            Environment validation
 src/db.js, migrate.js    PostgreSQL pool and migration runner
@@ -215,6 +236,8 @@ src/utils/               Streaks, statistics, schedules, dates, pagination, erro
 src/docs/openapi.js      OpenAPI description served at /docs
 migrations/              Numbered SQL migrations
 scripts/init-db.js       Applies pending migrations
+scripts/seed-demo.js     Creates a demo account with sample history
+render.yaml              Render deployment blueprint
 test/, test-utils/       Unit and API integration tests, helpers
 docs/                    Postman collection
 .github/workflows/       CI
@@ -233,4 +256,4 @@ docs/                    Postman collection
 
 ## Ideas for later
 
-Numeric goals (for example "8 glasses of water"), sharing a habit with a friend, email reminders, and a dark theme.
+Sharing a habit with a friend, email reminders, a forgot-password flow, and importing data from the JSON export.

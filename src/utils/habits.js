@@ -10,6 +10,9 @@ const habitJson = (h) => ({
   name: h.name,
   description: h.description,
   frequency: h.frequency,
+  category: h.category ?? null,
+  target: h.target ?? null,
+  unit: h.target != null ? h.unit ?? null : null,
   days_of_week: h.frequency === 'days' ? h.days_of_week : null,
   times_per_week: h.frequency === 'weekly' ? h.times_per_week : null,
   archived: h.archived_at != null,
@@ -55,4 +58,35 @@ function resolveSchedule(existing, input) {
   return { frequency, days_of_week: days, times_per_week: times };
 }
 
-module.exports = { FREQUENCIES, scheduleFields, habitJson, isRequired, resolveSchedule };
+// A short optional label. Blank means "no category".
+const categoryField = z
+  .string()
+  .trim()
+  .max(30, 'Category must be 30 characters or fewer.')
+  .transform((v) => (v === '' ? null : v))
+  .nullable();
+
+// A numeric daily goal: how much counts as "done" (target) and what it is measured in (unit).
+const goalFields = {
+  target: z
+    .number({ invalid_type_error: 'Target must be a number.' })
+    .positive('Target must be greater than zero.')
+    .max(1000000, 'Target must be 1,000,000 or less.')
+    .nullable(),
+  unit: z
+    .string()
+    .trim()
+    .max(20, 'Unit must be 20 characters or fewer.')
+    .transform((v) => (v === '' ? null : v))
+    .nullable(),
+};
+
+/** The goal a habit will have after a create or update. Clearing the target also clears the unit. */
+function resolveGoal(existing, input) {
+  const target = 'target' in input ? input.target : existing ? existing.target : null;
+  let unit = 'unit' in input ? input.unit : existing ? existing.unit : null;
+  if (target == null) unit = null;
+  return { target: target ?? null, unit: unit ?? null };
+}
+
+module.exports = { goalFields, resolveGoal, categoryField, FREQUENCIES, scheduleFields, habitJson, isRequired, resolveSchedule };

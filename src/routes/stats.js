@@ -14,6 +14,23 @@ router.use(requireAuth);
 const mean = (nums) => (nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : null);
 const inDays = (stats) => (stats.streak_unit === 'week' ? stats.current_streak * 7 : stats.current_streak);
 
+// Completion rate per category. Empty unless at least one habit has a category.
+function byCategory(perHabit) {
+  if (!perHabit.some((p) => p.habit.category)) return [];
+  const groups = new Map();
+  for (const { habit, stats } of perHabit) {
+    const key = habit.category ? habit.category.toLowerCase() : '';
+    if (!groups.has(key)) groups.set(key, { category: habit.category ?? null, habits: 0, rates: [], checkins: 0 });
+    const g = groups.get(key);
+    g.habits += 1;
+    g.checkins += stats.total_completed;
+    if (stats.completion_rate.days_30 !== null) g.rates.push(stats.completion_rate.days_30);
+  }
+  return [...groups.values()]
+    .map((g) => ({ category: g.category, habits: g.habits, checkins: g.checkins, rate_30: mean(g.rates) }))
+    .sort((a, b) => (b.rate_30 ?? -1) - (a.rate_30 ?? -1) || String(a.category).localeCompare(String(b.category)));
+}
+
 // Everything the Insights page shows, across all active habits.
 router.get(
   '/overview',
@@ -61,12 +78,14 @@ router.get(
         ? { habit_id: best.habit.id, name: best.habit.name, streak: best.stats.current_streak, unit: best.stats.streak_unit }
         : null,
       by_weekday: byWeekday,
+      by_category: byCategory(perHabit),
       activity: [...activity].map(([date, count]) => ({ date, count })),
       habits: perHabit
         .map(({ habit, stats }) => ({
           id: habit.id,
           name: habit.name,
           frequency: habit.frequency,
+          category: habit.category ?? null,
           current_streak: stats.current_streak,
           longest_streak: stats.longest_streak,
           streak_unit: stats.streak_unit,

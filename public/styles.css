@@ -16,6 +16,60 @@
   --font: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+/* Dark theme: follows the device unless the user picks Light or Dark in Settings. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --white: #0e1628;
+    --wash: #16213a;
+    --line: #2a3a5e;
+    --ink: #e8eeff;
+    --ink-soft: #a9b8d8;
+    --blue: #6b97ff;
+    --blue-deep: #8fb0ff;
+    --sky: #1d2f63;
+    --red: #ff6b5e;
+    --red-deep: #ff8f85;
+    --red-wash: #3b1c20;
+  }
+  :root:not([data-theme="light"]) .auth__intro { background: #133bb0; color: #fff; }
+  :root:not([data-theme="light"]) .auth__intro .cell--done { background: #fff; border-color: #fff; }
+  :root:not([data-theme="light"]) .auth__intro .cell--pending { border-color: #fff; }
+  :root:not([data-theme="light"]) .input:hover { border-color: #3d527f; }
+  :root:not([data-theme="light"]) .heat--1 { background: #1f3b8a; border-color: #1f3b8a; }
+  :root:not([data-theme="light"]) .heat--2 { background: #2f58c8; border-color: #2f58c8; }
+  :root:not([data-theme="light"]) .heat--3 { background: #5b88f5; border-color: #5b88f5; }
+  :root:not([data-theme="light"]) .heat--4 { background: #a9c4ff; border-color: #a9c4ff; }
+  :root:not([data-theme="light"]) .cal .cell--rest,:root:not([data-theme="light"]) .badge { color: #7d8fb6; }
+  :root:not([data-theme="light"]) dialog { box-shadow: 0 24px 60px rgba(0, 0, 0, .6); }
+  :root:not([data-theme="light"]) dialog::backdrop { background: rgba(0, 0, 0, .65); }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --white: #0e1628;
+  --wash: #16213a;
+  --line: #2a3a5e;
+  --ink: #e8eeff;
+  --ink-soft: #a9b8d8;
+  --blue: #6b97ff;
+  --blue-deep: #8fb0ff;
+  --sky: #1d2f63;
+  --red: #ff6b5e;
+  --red-deep: #ff8f85;
+  --red-wash: #3b1c20;
+}
+:root[data-theme="dark"] .auth__intro { background: #133bb0; color: #fff; }
+:root[data-theme="dark"] .auth__intro .cell--done { background: #fff; border-color: #fff; }
+:root[data-theme="dark"] .auth__intro .cell--pending { border-color: #fff; }
+:root[data-theme="dark"] .input:hover { border-color: #3d527f; }
+:root[data-theme="dark"] .heat--1 { background: #1f3b8a; border-color: #1f3b8a; }
+:root[data-theme="dark"] .heat--2 { background: #2f58c8; border-color: #2f58c8; }
+:root[data-theme="dark"] .heat--3 { background: #5b88f5; border-color: #5b88f5; }
+:root[data-theme="dark"] .heat--4 { background: #a9c4ff; border-color: #a9c4ff; }
+:root[data-theme="dark"] .cal .cell--rest,:root[data-theme="dark"] .badge { color: #7d8fb6; }
+:root[data-theme="dark"] dialog { box-shadow: 0 24px 60px rgba(0, 0, 0, .6); }
+:root[data-theme="dark"] dialog::backdrop { background: rgba(0, 0, 0, .65); }
+
 *, *::before, *::after { box-sizing: border-box; }
 
 html { -webkit-text-size-adjust: 100%; }
@@ -371,3 +425,23 @@ button.cell:disabled { cursor: default; }
   .rates { grid-template-columns: 1fr 1fr 1fr; }
   .rate { padding: .6rem; }
 }
+
+/* ---------- Categories ---------- */
+
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+.chip { min-height: 40px; padding: .25rem .95rem; border: 2px solid var(--line); border-radius: 999px; background: var(--white); font-weight: 600; }
+.chip:hover { border-color: var(--blue); }
+.chip[aria-pressed="true"] { background: var(--blue); border-color: var(--blue); color: var(--white); }
+.tag--cat { background: var(--sky); border-color: var(--sky); color: var(--blue-deep); }
+
+/* ---------- Numeric goals ---------- */
+
+.goal { display: grid; gap: .5rem; }
+.check-line { display: flex; align-items: flex-start; gap: .6rem; font-weight: 600; cursor: pointer; }
+.check-line input { width: 20px; height: 20px; margin-top: .15rem; accent-color: var(--blue); flex: none; }
+.goal__row { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: .5rem; }
+.goal__row[hidden] { display: none; }
+.tag--goal { border-color: var(--blue); color: var(--blue); background: var(--white); }
+.history__amount { grid-column: 1; justify-self: start; }
+.log-row--amount { grid-template-columns: minmax(0, 11rem) minmax(0, 8rem) minmax(0, 1fr) auto; }
+@media (max-width: 640px) { .log-row--amount { grid-template-columns: 1fr; } }
