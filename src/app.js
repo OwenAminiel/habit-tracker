@@ -33,6 +33,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/habits', require('./routes/habits'));
 app.use('/api/stats', require('./routes/stats'));
 app.use('/api/export', require('./routes/export'));
+app.use('/api/chat', require('./routes/chat'));
 
 app.use(notFound);
 app.use(errorHandler);

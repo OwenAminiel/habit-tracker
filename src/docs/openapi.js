@@ -59,6 +59,7 @@ const spec = {
     { name: 'Entries', description: 'Daily check-ins for a habit' },
     { name: 'Stats', description: 'Streaks, completion rates and overview' },
     { name: 'Export', description: 'Download your data' },
+    { name: 'Coach', description: 'Read-only AI chat about your own habits (needs ANTHROPIC_API_KEY on the server)' },
     { name: 'System', description: 'Health check' },
   ],
   components: {
@@ -457,6 +458,47 @@ const spec = {
     },
     '/api/stats/overview': {
       get: { tags: ['Stats'], summary: 'Overview across all habits', security: secured, parameters: [todayParam], responses: { 200: resp('Overview.', ref('Overview')), ...pick(400, 401) } },
+    },
+    '/api/chat/status': {
+      get: { tags: ['Coach'], summary: 'Is the Coach switched on?', security: secured, responses: { 200: resp('Availability.', { type: 'object', properties: { available: { type: 'boolean' } } }), 401: common[401] } },
+    },
+    '/api/chat': {
+      post: {
+        tags: ['Coach'],
+        summary: 'Ask the Coach a question about your habits',
+        description:
+          'Read-only. The Coach can look at your habits, streaks and stats but cannot change anything. Limited to 30 messages per 15 minutes and 150 per day per user. ' +
+          'Returns 503 when the server has no API key and 502 when the AI service is unavailable.',
+        security: secured,
+        requestBody: {
+          required: true,
+          content: json({
+            type: 'object',
+            required: ['messages'],
+            properties: {
+              today: { type: 'string', format: 'date', description: 'Your local date, so "this week" is right for your time zone.' },
+              messages: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 12,
+                description: 'The conversation so far. The last message must be from the user.',
+                items: {
+                  type: 'object',
+                  required: ['role', 'content'],
+                  properties: { role: { type: 'string', enum: ['user', 'assistant'] }, content: { type: 'string', minLength: 1, maxLength: 1000 } },
+                },
+              },
+            },
+          }),
+        },
+        responses: {
+          200: resp('The reply.', { type: 'object', properties: { reply: { type: 'string' }, tools_used: { type: 'array', items: { type: 'string' } } } }),
+          ...pick(400, 401),
+          429: errorRef('Too many messages.'),
+          502: errorRef('The AI service failed or took too long.'),
+          503: errorRef('The Coach is not set up on this server.'),
+        },
+      },
     },
     '/api/export': {
       get: {

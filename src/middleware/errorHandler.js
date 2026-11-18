@@ -10,10 +10,11 @@ function errorHandler(err, req, res, next) {
     return res.status(413).json({ error: { message: 'Request body is too large.', request_id: req.id } });
   }
   const status = err.status || 500;
-  if (status >= 500) console.error(`[${req.id}]`, err);
+  if (status >= 500 && !err.expose) console.error(`[${req.id}]`, err);
   res.status(status).json({
     error: {
-      message: status >= 500 ? 'Internal server error.' : err.message,
+      // Server errors hide their message unless the code that threw them marked it safe to show (err.expose).
+      message: status >= 500 && !err.expose ? 'Internal server error.' : err.message,
       ...(err.details && { details: err.details }),
       request_id: req.id,
     },

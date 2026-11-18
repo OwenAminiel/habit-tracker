@@ -15,9 +15,10 @@ Built for COMP 4327 Back-end Web Development with Node.js, Express, PostgreSQL, 
 - Export all data as JSON or CSV (CSV is safe to open in spreadsheets)
 - Server-side validation, one error format with a request id, correct status codes
 - Rate limiting, security headers, request logging, versioned database migrations
+- An optional AI **Coach** chat that answers questions about your own habits (read-only, needs an Anthropic API key)
 - Interactive API docs at `/docs` (OpenAPI 3), and a Postman collection
 
-**Web app** (white and blue, red for misses and deletes, with a dark theme): Today (with category filters), Insights (12-week heat map, best days, per-category and per-habit rates), Settings (theme, password, sessions, export, delete account).
+**Web app** (white and blue, red for misses and deletes, with a dark theme): Today (with category filters), Insights (12-week heat map, best days, per-category and per-habit rates), Coach (chat about your habits), Settings (theme, password, sessions, export, delete account).
 
 **Quality**: 100+ automated tests (unit and API integration), ESLint, and a GitHub Actions workflow that runs both.
 
@@ -58,7 +59,8 @@ Run `npm install` and then `npm run db:init` before `npm start`. Existing habits
 5. **Show archived habits** at the bottom of Today lists archived habits so you can restore them.
 6. **Category** is an optional label such as Health or Study. Once any habit has one, filter chips appear on Today and Insights adds a per-category breakdown.
 7. **Measure with a number** on the habit form gives a habit a daily target and unit, such as 8 glasses. The circle on Today then opens a small form to log how much you did, with a shortcut to mark the goal reached. A day counts as done once the amount reaches the target; smaller amounts are saved as progress and show in the history.
-8. **Insights** shows your trends. **Settings** has the theme (match your device, light, or dark), change password, log out everywhere, JSON and CSV export, and delete account.
+8. **Coach** is a chat where you can ask things like "How am I doing this week?". It is switched on only when the server has an Anthropic API key (see *The Coach* below); otherwise the tab says it is not switched on.
+9. **Insights** shows your trends. **Settings** has the theme (match your device, light, or dark), change password, log out everywhere, JSON and CSV export, and delete account.
 
 ## API reference
 
@@ -88,6 +90,8 @@ The interactive reference with every field and example is at `/docs`; the raw Op
 | GET | `/api/habits/:id/stats?today=` 🔒 | Completion rates, weekday counts, 8-week history, milestones | 200 |
 | GET | `/api/stats/overview?today=` 🔒 | Totals, rates, best streak, weekday counts, 12-week activity, per-habit rates | 200 |
 | GET | `/api/export?format=json\|csv` 🔒 | Download all your data | 200 |
+| GET | `/api/chat/status` 🔒 | `{available}`: whether the Coach is switched on | 200 |
+| POST | `/api/chat` 🔒 | Ask the Coach `{messages: [{role, content}], today?}` (1–12 messages, the last from the user, each up to 1000 characters). Returns `{reply, tools_used}` | 200 |
 | GET | `/health` | Health check | 200 |
 | GET | `/docs`, `/openapi.json` | Interactive docs and the OpenAPI description | 200 |
 
@@ -104,6 +108,16 @@ The interactive reference with every field and example is at `/docs`; the raw Op
 - `category` is an optional label of up to 30 characters. Send `null` or an empty string to clear it. A category matches case-insensitively, and an existing spelling is reused, so `health` becomes `Health` if you already use that.
 - `target` (a positive number) and `unit` (up to 20 characters) give a habit a daily goal. When a habit has a target, `POST /entries` accepts `value`, the amount done, and the day is `completed` once `value` reaches the target. The `completed` flag you send is ignored when `value` is given, and a plain check-in without a value counts as the full target. Sending `value` for a habit without a target is a 400. Smaller amounts are stored as progress, do not extend streaks, and appear in the history.
 - Changing a habit's target re-judges its logged amounts against the new target. Removing the target (`null`) also removes the unit and keeps the logged values.
+
+### The Coach
+
+The Coach is a chat in the web app (and `POST /api/chat`) that answers questions about your own habits using Claude through the Anthropic API.
+
+- **Switch it on:** create an API key at console.anthropic.com (it needs a small credit balance; this is separate from a Claude.ai subscription) and set `ANTHROPIC_API_KEY` on the server. On Render that is *Environment, Add variable*. Without a key the rest of the app works normally and the Coach tab says it is not switched on. Never put the key in the code, the repository, or the browser.
+- **Read-only:** Claude can only call three tools (`get_habits_overview`, `get_insights`, `get_habit_details`). Each one calls this app's own API with the caller's own token, so it sees exactly what that person could see. No tool creates, changes or deletes anything.
+- **Cost controls:** 30 messages per 15 minutes and 150 per day for each user, 12 messages of history, 1000 characters per message, replies capped at 700 tokens, at most 5 tool rounds per question, and a 30-second timeout. The default model is `claude-haiku-5-5` (cheap and fast); set `ANTHROPIC_MODEL` to use another.
+- **Privacy and safety:** habit data is sent to Anthropic only while answering a question. Provider error messages (which can mention account details) are logged on the server and never sent to the browser. Habit names and notes are treated as data, not instructions, in the system prompt.
+- **Tests** replace the model with a scripted fake, so `npm test` never contacts Anthropic or costs anything.
 
 ### Status codes and errors
 
@@ -203,6 +217,8 @@ Import `docs/habit-tracker.postman_collection.json` into Postman. Run the reques
 | `CORS_ORIGIN` | Comma-separated allowed origins. Without it any origin may call the API |
 | `TRUST_PROXY` | Set to `1` behind a hosting proxy so rate limits see real visitor addresses |
 | `LOG_REQUESTS` | `false` turns off the request log |
+| `ANTHROPIC_API_KEY` | Optional. Switches on the Coach chat (see *The Coach*) |
+| `ANTHROPIC_MODEL` | Optional. Model for the Coach (default `claude-haiku-5-5`) |
 
 The server checks its configuration on start and prints every problem at once. In production it refuses a placeholder `JWT_SECRET`.
 
@@ -251,6 +267,7 @@ docs/                    Postman collection
 - Every habit query is scoped to the logged-in user. Someone else's habit looks like a missing one (404).
 - All SQL uses parameters (sort columns come from a fixed list), request bodies are limited to 10 KB, and `helmet` sets security headers including a content security policy.
 - CSV exports defuse cells that start with `=`, `+`, `-` or `@` so they cannot run as spreadsheet formulas.
+- The Coach key never leaves the server, the Coach is read-only and scoped to the logged-in user, and it is rate limited per user.
 - The web app builds pages from text, never from raw HTML, so habit names and notes can't inject markup.
 - The token is kept in the browser's local storage, which is simple and fine for a course project. A production app might prefer an HttpOnly cookie.
 

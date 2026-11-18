@@ -58,6 +58,7 @@
     token: store.get(), user: null, today: isoLocal(new Date()), habits: [],
     detailId: null, detailEntries: [], detailStats: null,
     view: 'today', filter: null, archived: null, showArchived: false, overview: null,
+    coach: { messages: [], available: null },
   };
 
   /* ---------- Schedules ---------- */
@@ -255,6 +256,7 @@
     state.filter = null;
     state.archived = null;
     state.showArchived = false;
+    state.coach = { messages: [], available: null };
     store.clear();
     if ($dialog.open) $dialog.close();
     $dialog.replaceChildren();
@@ -263,7 +265,7 @@
 
   /* ---------- Page shell and navigation ---------- */
 
-  const NAV = [['today', 'Today'], ['insights', 'Insights'], ['settings', 'Settings']];
+  const NAV = [['today', 'Today'], ['insights', 'Insights'], ['coach', 'Coach'], ['settings', 'Settings']];
 
   function shell(...content) {
     return [
@@ -306,6 +308,7 @@
     try {
       if (view === 'today') await loadDashboard();
       else if (view === 'insights') await loadInsights();
+      else if (view === 'coach') await renderCoach();
       else renderSettings();
       window.scrollTo(0, 0);
     } catch (err) {
@@ -536,6 +539,83 @@
         body
       )
     );
+  }
+
+  /* ---------- Coach (read-only chat about your own habits) ---------- */
+
+  const COACH_IDEAS = ['How am I doing this week?', 'Which habit needs the most attention?', 'What is my best streak and how can I keep it going?', 'Which day of the week am I weakest?'];
+
+  async function renderCoach() {
+    state.view = 'coach';
+    state.today = isoLocal(new Date());
+    if (state.coach.available === null) {
+      try { state.coach.available = (await api('/api/chat/status')).available; } catch { state.coach.available = false; }
+    }
+
+    const log = h('div', { class: 'coach__log', role: 'log', 'aria-live': 'polite', 'aria-label': 'Conversation with the Coach' });
+    const bubble = (role, text, extra) => h('div', { class: `bubble bubble--${role}${extra ? ` ${extra}` : ''}` }, h('span', { class: 'bubble__who', text: role === 'user' ? 'You' : 'Coach' }), h('p', { class: 'bubble__text', text }));
+    const scroll = () => { log.scrollTop = log.scrollHeight; };
+
+    const input = h('textarea', { class: 'input coach__input', id: 'coach-input', rows: '2', maxlength: '1000', placeholder: 'Ask about your habits…', 'aria-label': 'Message to the Coach' });
+    const send = h('button', { class: 'btn', type: 'submit', text: 'Send' });
+    let busy = false;
+
+    async function ask(text) {
+      text = text.trim();
+      if (!text || busy) return;
+      busy = true;
+      send.disabled = true;
+      input.value = '';
+      ideas.hidden = true;
+      state.coach.messages.push({ role: 'user', content: text });
+      log.append(bubble('user', text));
+      const thinking = bubble('coach', 'Looking at your habits…', 'bubble--thinking');
+      log.append(thinking);
+      scroll();
+      // Send the last 12 messages, starting from one of the person's own (the server needs the first to be theirs).
+      const recent = state.coach.messages.slice(-12);
+      while (recent.length && recent[0].role !== 'user') recent.shift();
+      try {
+        const data = await api('/api/chat', { method: 'POST', body: { today: state.today, messages: recent } });
+        state.coach.messages.push({ role: 'assistant', content: data.reply });
+        thinking.replaceWith(bubble('coach', data.reply));
+      } catch (err) {
+        thinking.replaceWith(bubble('coach', err.message, 'bubble--error'));
+      }
+      busy = false;
+      send.disabled = false;
+      scroll();
+      input.focus();
+    }
+
+    const ideas = h('div', { class: 'coach__ideas', hidden: state.coach.messages.length > 0 },
+      COACH_IDEAS.map((t) => h('button', { class: 'chip', type: 'button', text: t, onclick: () => ask(t) })));
+
+    const form = h('form', { class: 'coach__form', onsubmit: (e) => { e.preventDefault(); ask(input.value); } }, input, send);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(input.value); }
+    });
+
+    for (const m of state.coach.messages) log.append(bubble(m.role === 'user' ? 'user' : 'coach', m.content));
+
+    const intro = state.coach.messages.length === 0
+      ? bubble('coach', 'Hi! I can look at your habits and streaks and tell you how things are going. I can only read your data. I can’t change anything. What would you like to know?')
+      : null;
+    if (intro) log.append(intro);
+
+    const body = state.coach.available
+      ? h('div', { class: 'coach' }, log, ideas, form, h('p', { class: 'coach__note', text: 'The Coach is an AI and can make mistakes. Your habit data is shared with it only to answer your questions.' }))
+      : h('div', { class: 'empty' }, h('h2', { class: 'empty__title', text: 'The Coach is not switched on' }),
+          h('p', { class: 'empty__text', text: 'This server has no Anthropic API key yet, so the Coach cannot answer. The rest of the app works as usual.' }));
+
+    $app.replaceChildren(
+      ...shell(
+        h('div', { class: 'page__head' }, h('div', {}, h('h1', { class: 'page__title', text: 'Coach' }),
+          h('p', { class: 'page__sub', text: 'Ask questions about your own habits and progress.' }))),
+        body
+      )
+    );
+    scroll();
   }
 
   /* Twelve weeks of activity: one square per day, darker blue when more habits were done. */
