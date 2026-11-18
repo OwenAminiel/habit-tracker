@@ -1,0 +1,22 @@
+# Render Blueprint: a web service that uses your existing Supabase database.
+services:
+  - type: web
+    name: habit-tracker
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run db:init && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: 1
+      - key: DATABASE_SSL
+        value: true
+      - key: DATABASE_URL
+        sync: false # you paste your Supabase session pooler string in the Render dashboard
+      - key: JWT_SECRET
+        generateValue: true

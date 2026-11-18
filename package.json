@@ -10,6 +10,7 @@
     "test": "node --test",
     "test:unit": "node --test test/streak.test.js test/stats.test.js test/unit-misc.test.js",
     "db:migrate": "node scripts/init-db.js",
+    "seed:demo": "node scripts/seed-demo.js",
     "lint": "eslint .",
     "check": "npm run lint && npm test"
   },

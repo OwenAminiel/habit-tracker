@@ -531,7 +531,7 @@
     const dow = ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((c) => h('span', { class: 'heatgrid__dow', 'aria-hidden': 'true', text: c }));
     return h('section', { class: 'panel' },
       h('h2', { class: 'panel__title', text: 'Last 12 weeks' }),
-      h('p', { class: 'sheet__note', text: `${total} check-ins. Darker squares mean more of your habits were done that day.` }),
+      h('p', { class: 'sheet__note', text: `${total} ${total === 1 ? 'check-in' : 'check-ins'}. Darker squares mean more of your habits were done that day.` }),
       h('div', { class: 'heatwrap', role: 'img', 'aria-label': `Heat map of check-ins for the last 12 weeks, ${total} in total.` },
         h('div', { class: 'heatgrid' }, dow, cells)),
       h('div', { class: 'legend', 'aria-hidden': 'true' },
