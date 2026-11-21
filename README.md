@@ -1,54 +1,155 @@
 # Habit Tracker
 
-A back-end API and web app for building habits. Create an account, add habits with a schedule (every day, chosen weekdays, or a number of times a week), check in, and see streaks, completion rates, milestones and trends. Each habit's last 14 days show as a chain: consecutive check-ins join into one blue bar, and a missed day breaks it in red.
+## 1. Project Title & Description
 
-Built for COMP 4327 Back-end Web Development with Node.js, Express, PostgreSQL, JWT authentication, and Zod validation.
+**Habit Tracker** is a back-end REST API with a web app on top of it. People create an account, add habits, check in each day, and see their streaks, completion rates and trends. An optional AI "Coach" chat answers questions about their own progress.
 
-## Features
+**What it does**
+- Stores users, habits and daily check-ins in a PostgreSQL database and exposes them through a secured REST API.
+- Calculates streaks that respect each habit's schedule (every day, chosen weekdays, or N times a week).
+- Shows the results in a simple web app (white and blue, with red for misses and deletes, plus a dark theme).
 
-**API**
-- Registration and login with hashed passwords (bcrypt) and signed tokens (JWT); change password, log out of every device, delete account
-- Habits with schedules (daily, chosen weekdays, or N times a week), optional categories, optional numeric goals ("8 glasses"), archive and restore
-- Daily check-ins with notes; streaks that respect the schedule (day streaks, or week streaks for weekly goals)
-- Statistics: completion rates (7, 30, 90 days), best weekdays, weekly history, milestone badges, and an overview across all habits
-- Pagination, sorting, search and filters on lists
+**Why I built it**
+This is my independent project for **COMP 4327 Back-end Web Development**. The approved topic was a Habit Tracker API focused on reliable server-side logic: authentication and protected routes, a real database, input validation, error handling and clear API responses. I built the web app on top so the API can be used and demonstrated end to end.
+
+## 2. Tech Stack
+
+| Area | Technology |
+|---|---|
+| Runtime and framework | Node.js 22, Express 4 |
+| Database | PostgreSQL (hosted on Supabase), `pg` driver, versioned SQL migrations |
+| Authentication | JSON Web Tokens (`jsonwebtoken`), password hashing with `bcryptjs` |
+| Validation | Zod |
+| Security | `helmet` (security headers), `cors`, `express-rate-limit` |
+| API documentation | OpenAPI 3 with Swagger UI at `/docs`, Postman collection |
+| Front end | Plain HTML, CSS and JavaScript (no framework) |
+| AI (optional) | Anthropic Claude API, called from the server |
+| Testing and quality | Node's built-in test runner, ESLint, GitHub Actions, Newman |
+| Hosting | Render (web service) with Supabase (database) |
+
+## 3. Features
+
+**Accounts and security**
+- Register and log in; passwords are hashed and never returned
+- Change password, log out of every device, delete account and all data
+- Every habit query is scoped to the logged-in user; someone else's habit looks like a missing one (404)
+- Rate limiting, security headers, request logging with a request id on every response
+
+**Habits**
+- Create, read, update, delete (full CRUD), plus archive and restore
+- Schedules: every day, chosen weekdays, or N times a week
+- Optional categories (for example Health or Study) with filter chips
+- Optional numeric goals, such as 8 glasses of water a day, with partial progress
+- Search, filters, sorting and pagination on lists
+
+**Progress**
+- Daily check-ins with optional notes; check in for any past day
+- Streaks that skip rest days and count weeks for weekly goals
+- Completion rates (7, 30 and 90 days), best weekdays, milestone badges
+- Insights page: 12-week activity heat map and per-habit and per-category rates
 - Export all data as JSON or CSV (CSV is safe to open in spreadsheets)
-- Server-side validation, one error format with a request id, correct status codes
-- Rate limiting, security headers, request logging, versioned database migrations
-- An optional AI **Coach** chat that answers questions about your own habits (read-only, needs an Anthropic API key)
-- Interactive API docs at `/docs` (OpenAPI 3), and a Postman collection
 
-**Web app** (white and blue, red for misses and deletes, with a dark theme): Today (with category filters), Insights (12-week heat map, best days, per-category and per-habit rates), Coach (chat about your habits), Settings (theme, password, sessions, export, delete account).
+**Coach (optional)**
+- A chat that answers questions such as "How am I doing this week?" using the user's own data
+- Read-only, per-user rate limited, and switched off automatically when no API key is set
 
-**Quality**: 100+ automated tests (unit and API integration), ESLint, and a GitHub Actions workflow that runs both.
+**Developer experience**
+- Interactive API docs at `/docs`, and a Postman collection with automated assertions
+- 113 automated tests (unit and API integration), ESLint, and a CI workflow
+- One consistent error format with the right status codes
 
-## Quick start
+## 4. How to Run the Project
 
-You need Node 18 or newer and a PostgreSQL database (local or hosted, for example Supabase).
+### Live version
+
+Open the deployed app: **https://habit-tracker-b7zf.onrender.com** (API docs at `/docs`).
+Click **Create account** to try it. On the free hosting tier the first load after a period of inactivity can take about a minute.
+
+### Run it on your computer
+
+**You need:** Node.js 18 or newer, and a PostgreSQL database (local, or a free Supabase project).
 
 ```bash
 npm install
-cp .env.example .env     # Windows Command Prompt: copy .env.example .env
+cp .env.example .env        # Windows Command Prompt: copy .env.example .env
 ```
 
-Edit `.env`: set `DATABASE_URL` and a real `JWT_SECRET`, and set `DATABASE_SSL=true` for hosted databases. Then:
+Edit `.env` and set:
+- `DATABASE_URL` to your PostgreSQL connection string (for Supabase use the **Session pooler** string, with no `[brackets]` around the password)
+- `DATABASE_SSL=true` for hosted databases
+- `JWT_SECRET` to a long random string. Generate one with:
+  `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+
+Then create the tables and start the server:
 
 ```bash
-npm run db:init          # applies database migrations (safe to run again)
-npm start                # http://localhost:3000
+npm run db:init             # applies the database migrations (safe to run again)
+npm start                   # http://localhost:3000
 ```
 
-Open <http://localhost:3000> for the web app and <http://localhost:3000/docs> for the API docs. The server refuses to start while a migration is pending and tells you to run `npm run db:init`. `npm run dev` restarts on file changes; if it restarts constantly your project folder is probably inside OneDrive, so use `npm start` or move the folder.
+Open <http://localhost:3000> for the web app and <http://localhost:3000/docs> for the API docs.
 
-Generate a JWT secret with:
+**Optional setup**
+- `npm run seed:demo` creates a demo account with sample habits and about 10 weeks of history (login: see the script's header). See *Demo data* below.
+- `ANTHROPIC_API_KEY` in `.env` switches on the Coach chat. Without it everything else works and the Coach tab says it is not switched on.
+- `npm test` runs the tests, `npm run lint` runs ESLint. See *Testing* below.
 
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
+## 5. Screenshots
 
-### Upgrading from version 1
+| | |
+|---|---|
+| **Sign in** | **Today** |
+| ![Sign in page](docs/screenshots/1-login.png) | ![Today page with streaks](docs/screenshots/2-today.png) |
+| **Habit details** | **Insights** |
+| ![Habit details with calendar and stats](docs/screenshots/3-habit-detail.png) | ![Insights page with heat map](docs/screenshots/4-insights.png) |
+| **Coach chat** | **Dark theme** |
+| ![Coach chat](docs/screenshots/5-coach.png) | ![Dark theme](docs/screenshots/6-dark-mode.png) |
 
-Run `npm install` and then `npm run db:init` before `npm start`. Existing habits and check-ins are kept; every existing habit becomes a daily habit. Changes to be aware of: `GET /api/habits` and the entries list now return `{ ..., pagination }`, habit objects no longer include `user_id`, and a wrong password on the password and delete-account confirmations returns 403.
+**Interactive API documentation (`/docs`)**
+
+![Swagger API docs](docs/screenshots/7-api-docs.png)
+
+## 6. Team Members
+
+| Name | Role |
+|---|---|
+| **Owen Aminiel** | Independent project. Design, database, API, web app, testing, deployment and documentation |
+
+Claude (Anthropic's AI assistant) was used as a coding assistant during development.
+
+## 7. Challenges & Learning
+
+**Challenges**
+- **Streaks are harder than they look.** A streak has to skip rest days, count weeks for "3 times a week" goals, never punish the day that is still in progress, and respect the user's time zone. I solved it by having the browser send its local date, and by keeping the streak logic in small pure functions that have their own unit tests.
+- **Making the database changes safe.** I moved from one schema file to numbered migrations, with a lock so two servers can't migrate at once. That lock does not work through Supabase's transaction pooler, so I had to learn the difference between the session and transaction poolers.
+- **Deployment surprises.** My first deploys failed with "tenant or user not found". The cause was a paused free Supabase project, not my code. I also learned that free hosting sleeps when idle.
+- **Security details.** Logging out everywhere needed token versioning, so old tokens stop working. CSV exports needed protection against spreadsheet formula injection, and all queries had to be scoped to the owner.
+- **Numeric goals touched everything.** Adding "8 glasses" meant that whether a day counts as done depends on the amount, so changing a goal has to re-judge past entries.
+- **Testing code that calls an AI service.** Tests must never call (or pay for) the real API, so the Coach's model call can be swapped for a scripted fake.
+
+**What I learned**
+- Designing a REST API: resources, status codes, pagination, and one consistent error format
+- Authentication and authorization with JWT and bcrypt, and why per-user scoping matters
+- Validating all input on the server with Zod
+- Versioned database migrations and relational design with foreign keys and cascades
+- Writing unit and integration tests, and using a separate test database
+- Documenting an API with OpenAPI and Postman
+- Deploying a Node and PostgreSQL app, and reading logs to find the real cause of a failure
+- Calling an external AI API safely: keep the key on the server, use read-only tools, and cap usage
+
+## 8. Future Improvements
+
+- Forgot-password flow with email
+- Email or push reminders for habits
+- Sharing a habit with a friend
+- Importing data from the JSON export
+- Letting the Coach log check-ins and add habits, after the user confirms
+
+---
+
+# Technical Reference
+
+The rest of this file is the detailed reference for developers and graders: the API, configuration, data model, testing and deployment.
 
 ## Using the web app
 
@@ -236,7 +337,7 @@ On the free tier the service sleeps after a period of inactivity, so the first r
 
 ### Demo data
 
-`npm run seed:demo` creates `demo@example.com` (password `demo-password-123`) with six habits (including categories and a numeric goal) and about ten weeks of history, which makes the Insights page worth showing. It refuses to run when `NODE_ENV=production` unless `ALLOW_DEMO_SEED=true`, and re-running it resets that account.
+`npm run seed:demo` creates `demo@example.com` (password `demo-password-123`) with six habits (including categories and a numeric goal) and about ten weeks of history, which makes the Insights page worth showing. It refuses to run when `NODE_ENV=production` unless `ALLOW_DEMO_SEED=true`, and re-running it resets that account. To fill an account you already have, set `SEED_EMAIL` (PowerShell: `$env:SEED_EMAIL="you@example.com"; npm run seed:demo`). That keeps its password but deletes all of its current habits first.
 
 ## Project structure
 
@@ -270,7 +371,3 @@ docs/                    Postman collection
 - The Coach key never leaves the server, the Coach is read-only and scoped to the logged-in user, and it is rate limited per user.
 - The web app builds pages from text, never from raw HTML, so habit names and notes can't inject markup.
 - The token is kept in the browser's local storage, which is simple and fine for a course project. A production app might prefer an HttpOnly cookie.
-
-## Ideas for later
-
-Sharing a habit with a friend, email reminders, a forgot-password flow, and importing data from the JSON export.

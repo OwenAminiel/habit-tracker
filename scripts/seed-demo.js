@@ -1,13 +1,18 @@
 // Creates a demo account with realistic habits and 10 weeks of history, for demos and screenshots.
 //   npm run seed:demo
 // Login: demo@example.com / demo-password-123   (re-running resets that account's data)
+//
+// To fill an account you already have instead (keeps its email and password, DELETES all of its current habits):
+//   PowerShell:  $env:SEED_EMAIL="you@example.com"; npm run seed:demo
+//   bash:        SEED_EMAIL=you@example.com npm run seed:demo
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
 const { pool } = require('../src/db');
 const { migrate } = require('../src/migrate');
 const { utcToday, addDays, dayOfWeek } = require('../src/utils/dates');
 
-const EMAIL = 'demo@example.com';
+const EMAIL = (process.env.SEED_EMAIL || 'demo@example.com').trim().toLowerCase();
+const CUSTOM = Boolean(process.env.SEED_EMAIL);
 const PASSWORD = 'demo-password-123';
 
 if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_SEED !== 'true') {
@@ -31,9 +36,17 @@ const NOTES = ['Felt great', 'Short session', 'Finished a chapter', 'Tired but d
 
 (async () => {
   await migrate(pool);
-  await pool.query('DELETE FROM users WHERE email = $1', [EMAIL]);
-  const user = await pool.query('INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id', [EMAIL, await bcrypt.hash(PASSWORD, 10)]);
-  const userId = user.rows[0].id;
+  let userId;
+  const existing = CUSTOM ? await pool.query('SELECT id FROM users WHERE email = $1', [EMAIL]) : { rows: [] };
+  if (existing.rows[0]) {
+    // Your own account: keep the user and password, replace only the habits (entries go with them).
+    userId = existing.rows[0].id;
+    await pool.query('DELETE FROM habits WHERE user_id = $1', [userId]);
+  } else {
+    await pool.query('DELETE FROM users WHERE email = $1', [EMAIL]);
+    const user = await pool.query('INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id', [EMAIL, await bcrypt.hash(PASSWORD, 10)]);
+    userId = user.rows[0].id;
+  }
   const today = utcToday();
   let entries = 0;
 
@@ -54,7 +67,9 @@ const NOTES = ['Felt great', 'Short session', 'Finished a chapter', 'Tired but d
       entries++;
     }
   }
-  console.log(`Demo account ready: ${EMAIL} / ${PASSWORD} (${HABITS.length} habits, ${entries} check-ins)`);
+  console.log(existing.rows[0]
+    ? `Filled ${EMAIL} with ${HABITS.length} habits and ${entries} check-ins. Its password is unchanged.`
+    : `Demo account ready: ${EMAIL} / ${PASSWORD} (${HABITS.length} habits, ${entries} check-ins)`);
   await pool.end();
 })().catch((err) => {
   console.error('Seeding failed:', err.message);
